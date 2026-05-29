@@ -9,7 +9,7 @@ Paveda의 목표는 Claude Code, Codex, Hermes, Pi 등 어떤 agent 플랫폼을
 
 핵심은 Paveda가 단순한 rule file 배포기가 되면 안 된다는 점이다. `AGENTS.md`, `CLAUDE.md`, `.codex/hooks.json`, skill, plugin manifest 같은 host별 파일은 host가 Paveda를 발견하고 호출하기 위한 호환 표면일 뿐이다. 규칙의 원천은 이 파일들이 아니라 Paveda 런타임이어야 한다.
 
-권위 있는 source of truth는 다음 네 가지다.
+권위 있는 기준은 다음 네 가지다.
 
 1. Paveda policy runtime
 2. 공통 event / decision model
@@ -74,7 +74,7 @@ Reference: https://modelcontextprotocol.io/specification/2025-11-25
 
 ### Rule Sync 계열 프로젝트
 
-RuleSync 같은 프로젝트는 하나의 source에서 여러 AI tool config를 생성한다. 이는 compatibility export 패턴으로 참고할 수 있지만, Paveda의 핵심 목표를 단독으로 만족하지 않는다.
+RuleSync 같은 프로젝트는 하나의 기준 정의에서 여러 AI tool config를 생성한다. 이는 compatibility export 패턴으로 비교할 수 있지만, Paveda의 핵심 목표를 단독으로 만족하지 않는다.
 
 Paveda의 목적은 규칙 파일을 여러 곳에 뿌리는 것이 아니라, 모든 host가 같은 policy runtime을 통과하게 만드는 것이다.
 
