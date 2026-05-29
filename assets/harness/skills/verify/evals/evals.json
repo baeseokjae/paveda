@@ -1,0 +1,51 @@
+[
+	{
+		"eval_id": 1,
+		"eval_name": "verify-full",
+		"prompt": "",
+		"assertions": [
+			{
+				"text": "Lint 결과가 포함되어야 함",
+				"type": "contains_section",
+				"pattern": "Lint"
+			},
+			{
+				"text": "Test 결과가 포함되어야 함",
+				"type": "contains_section",
+				"pattern": "Test"
+			},
+			{
+				"text": "Build 결과가 포함되어야 함",
+				"type": "contains_section",
+				"pattern": "Build"
+			},
+			{
+				"text": "최종 PASS/FAIL 판정이 있어야 함",
+				"type": "match_format",
+				"pattern": "(PASS|FAIL)"
+			}
+		]
+	},
+	{
+		"eval_id": 2,
+		"eval_name": "verify-quick",
+		"prompt": "--quick",
+		"assertions": [
+			{
+				"text": "Lint 결과가 포함되어야 함",
+				"type": "contains_section",
+				"pattern": "Lint"
+			},
+			{
+				"text": "Test 결과가 포함되어야 함",
+				"type": "contains_section",
+				"pattern": "Test"
+			},
+			{
+				"text": "최종 PASS/FAIL 판정이 있어야 함",
+				"type": "match_format",
+				"pattern": "(PASS|FAIL)"
+			}
+		]
+	}
+]

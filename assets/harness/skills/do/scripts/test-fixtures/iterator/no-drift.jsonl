@@ -1,0 +1,3 @@
+{"sprint": 1, "iteration": 1, "timestamp": "2026-05-11T10:00:00Z", "output_hash_normalized": "hash_X", "match_rate": 85, "gap_fingerprint": "fp_1", "injected_personas": []}
+{"sprint": 1, "iteration": 2, "timestamp": "2026-05-11T10:10:00Z", "output_hash_normalized": "hash_Y", "match_rate": 85.005, "gap_fingerprint": "fp_2", "injected_personas": []}
+{"sprint": 1, "iteration": 3, "timestamp": "2026-05-11T10:20:00Z", "output_hash_normalized": "hash_Z", "match_rate": 85.01, "gap_fingerprint": "fp_3", "injected_personas": []}

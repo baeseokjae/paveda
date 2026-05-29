@@ -1,0 +1,4 @@
+{"sprint": 1, "iteration": 1, "timestamp": "2026-05-11T10:00:00Z", "output_hash_normalized": "hash_A", "match_rate": 75, "gap_fingerprint": "fp_1", "injected_personas": []}
+{"sprint": 1, "iteration": 2, "timestamp": "2026-05-11T10:10:00Z", "output_hash_normalized": "hash_A", "match_rate": 76, "gap_fingerprint": "fp_1", "injected_personas": []}
+{"sprint": 1, "iteration": 3, "timestamp": "2026-05-11T10:20:00Z", "output_hash_normalized": "hash_A", "match_rate": 77, "gap_fingerprint": "fp_1", "injected_personas": []}
+{"sprint": 2, "iteration": 1, "timestamp": "2026-05-11T11:00:00Z", "output_hash_normalized": "hash_B", "match_rate": 80, "gap_fingerprint": "fp_2", "injected_personas": []}

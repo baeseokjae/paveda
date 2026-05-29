@@ -1,0 +1,76 @@
+{
+	"schemaVersion": 1,
+	"name": "paveda-core-harness",
+	"description": "Canonical Paveda harness bundle. Host installers adapt these assets into Claude Code, Codex, pi, Hermes, or other agent runtimes.",
+	"host": "canonical",
+	"status": "active",
+	"instructions": {
+		"path": "AGENTS.md",
+		"notes": "Canonical project instructions rendered to the selected host instruction file."
+	},
+	"contextModules": [
+		{
+			"name": "backend-patterns",
+			"path": "context-modules/backend-patterns.md",
+			"notes": "Backend service, data, validation, error, and test patterns."
+		},
+		{
+			"name": "frontend-patterns",
+			"path": "context-modules/frontend-patterns.md",
+			"notes": "Client UI, state, interaction, styling, and browser test patterns."
+		},
+		{
+			"name": "worker-patterns",
+			"path": "context-modules/worker-patterns.md",
+			"notes": "Background job, retry, side effect, observability, and worker test patterns."
+		},
+		{
+			"name": "infra-patterns",
+			"path": "context-modules/infra-patterns.md",
+			"notes": "Config, secrets, deployment, CI, and operational script patterns."
+		}
+	],
+	"skills": [
+		{
+			"name": "do",
+			"router": true,
+			"path": "skills/do",
+			"notes": "PDCA implementation orchestrator with agents, personas, stagnation detectors, templates, and eval fixtures."
+		},
+		{
+			"name": "specify",
+			"path": "skills/specify",
+			"notes": "Socratic specification flow and ambiguity scoring."
+		},
+		{
+			"name": "plan",
+			"path": "skills/plan",
+			"notes": "Plan-only pipeline that hands off to /do --from-spec."
+		},
+		{
+			"name": "verify",
+			"path": "skills/verify",
+			"notes": "Verification checklist and command runner guidance."
+		},
+		{
+			"name": "debug",
+			"path": "skills/debug",
+			"notes": "Root-cause debugging flow."
+		},
+		{
+			"name": "commit",
+			"path": "skills/commit",
+			"notes": "Intentional git commit workflow."
+		},
+		{
+			"name": "pr",
+			"path": "skills/pr",
+			"notes": "GitHub Flow pull request workflow."
+		},
+		{
+			"name": "surgical-edits",
+			"path": "skills/surgical-edits",
+			"notes": "Diff discipline guardrail for code edits."
+		}
+	]
+}

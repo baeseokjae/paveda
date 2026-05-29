@@ -1,0 +1,26 @@
+{
+	"skill_name": "plan",
+	"evals": [
+		{
+			"id": 1,
+			"name": "backend-only-sort-api",
+			"prompt": "/plan 세션 목록 API에 createdAt 기준 정렬 옵션 추가",
+			"expected_output": "Phase 1.5에서 /specify --discover 호출, Phase 4b Design Validator의 UI/UX Step 2는 HAS_UI_CHANGES=false로 skip, PM 위임은 정상 트리거. 산출물은 docs/plans/{YYYY-MM-DD}-session-list-sort.md 형식. Sprint 1개, AFFECTED_FILES < 5.",
+			"files": []
+		},
+		{
+			"id": 2,
+			"name": "fullstack-ui-widget",
+			"prompt": "/plan 프로젝트 상세 페이지에 세션 통계 위젯 추가 — 최근 30일 사용량, 평균 길이, 모델별 분포 차트",
+			"expected_output": "Phase 4b에서 HAS_UI_CHANGES=true 감지, /impeccable이 사용 가능하면 위임하고 없으면 내장 UI checklist fallback 적용. optional frontend best-practices skill도 사용 가능할 때만 트리거. 데이터 수명주기 표에 UI 컴포넌트 명시. 산출물은 docs/plans/{YYYY-MM-DD}-feature-widget.md.",
+			"files": []
+		},
+		{
+			"id": 3,
+			"name": "infra-external-service",
+			"prompt": "/plan Loki를 통한 세션 로그 검색 — 키워드/시간 범위 필터, 로그 라인 하이라이트",
+			"expected_output": "Phase 3b 외부 리서치 트리거 (Loki 외부 서비스), /find-skills와 /deep-research가 사용 가능하면 활용하고 없으면 packaged context + codebase synthesis로 진행. AFFECTED_FILES가 9개 이상이면 Phase 2b 코드베이스 컨텍스트 보강. 새 도메인 판정 가능성. PM risk checklist에서 보안/성능 리스크 탐지.",
+			"files": []
+		}
+	]
+}

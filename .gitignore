@@ -1,0 +1,34 @@
+node_modules/
+dist/
+coverage/
+.tsbuildinfo
+*.tsbuildinfo
+
+# env / secrets
+.env
+.env.*
+!.env.example
+
+# os / editor
+.DS_Store
+.vscode/
+.idea/
+
+# local agent state
+/.claude/
+/.codex/
+/.pi/
+/.hermes/
+
+# local store (PAVEDA SQLite EventStore)
+.harness/
+*.db
+*.db-journal
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# scrapes / tmp
+.firecrawl/
