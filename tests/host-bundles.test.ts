@@ -359,6 +359,47 @@ describe("host skill bundles", () => {
 		expect(existsSync(join(dir, ".codex", "skills", "do", "SKILL.md"))).toBe(false);
 	});
 
+	it("keeps optional manifest skills out of default installs unless requested", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-host-manifest-optional-skills-"));
+		tempDirs.push(dir);
+		const harnessRoot = join(dir, "builtin");
+		const builtinRoot = join(harnessRoot, "skills");
+		writeSkill(builtinRoot, "do", "do", "do skill");
+		writeSkill(builtinRoot, "review", "review", "review skill");
+		writeHarnessManifest(harnessRoot, {
+			skills: [
+				{ name: "do", path: "skills/do" },
+				{ name: "review", path: "skills/review", optional: true },
+			],
+		});
+
+		const defaultResult = installHostSkillBundle({
+			host: "codex",
+			cwd: dir,
+			builtinRoots: [builtinRoot],
+		});
+
+		expect(defaultResult.skills.map((skill) => skill.name)).toEqual(["do"]);
+
+		const explicitResult = installHostSkillBundle({
+			host: "codex",
+			cwd: dir,
+			builtinRoots: [builtinRoot],
+			skills: ["review"],
+		});
+
+		expect(explicitResult.skills.map((skill) => skill.name)).toEqual(["review"]);
+
+		const optionalResult = installHostSkillBundle({
+			host: "codex",
+			cwd: dir,
+			builtinRoots: [builtinRoot],
+			includeOptional: true,
+		});
+
+		expect(optionalResult.skills.map((skill) => skill.name)).toEqual(["do", "review"]);
+	});
+
 	it("rejects explicit host bundle skills omitted from the harness manifest", () => {
 		const dir = mkdtempSync(join(tmpdir(), "paveda-host-manifest-skill-reject-"));
 		tempDirs.push(dir);

@@ -21,6 +21,7 @@ Paveda는 agent workflow를 **단독 오픈소스 하네스**로 제공한다. �
 
 - Paveda 패키지 자체가 canonical harness 정의가 된다.
 - 호스트별 agent runtime에 설치되는 운영 인프라(skill loader, hook profile, EventStore, PAL Router 등)와 core harness skills(`/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, `/surgical-edits`)를 함께 제공한다.
+- Optional portable skills(`/docs-writer`, `/review`, `/browser-validate`, `/dead-code`)는 기본 설치에서 제외하고 명시적으로 선택한 경우에만 host bundle에 렌더링한다.
 - 소비 프로젝트의 `.claude`, `.codex`, `.pi`, `.hermes` 파일은 Paveda installer가 생성/갱신하는 host별 산출물이다.
 - 프로젝트 도메인 hook/skill은 core harness 영역 밖이며, project pack 또는 local override로 관리한다.
 
@@ -119,8 +120,8 @@ EventStore와 외부 도메인 지식 저장소는 **서로 모른 채로** 동�
 | `harness.session.context` | SessionStart | 브랜치/커밋/working tree 상태 주입. SessionStart context 상한(`MAX_CHARS`)으로 토큰 폭증 방지. |
 | `harness.cost.guard` | PostToolUse / Agent | Agent 스폰 수·세션 경과 시간 추적. 임계값 초과 시 `/compact` 권고. EventStore에 누적. |
 | `harness.test.process.cleanup` | PostToolUse / Bash | test command 이후 남은 test worker process 정리. |
-| `harness.destructive.guard` | PreToolUse / Bash | `.env` 쓰기, `DROP TABLE`, `rm -rf` 같은 위험 패턴 차단 (D-001~D-006). |
-| `harness.blast.check` | PreToolUse / Edit\|Write | `package.json`, `pyproject.toml` 등 의존성 manifest 변경 감지 → 알림. |
+| `harness.destructive.guard` | PreToolUse / Bash plus file mutation companion | `.env` 쓰기, `DROP TABLE`, `rm -rf`, secret key file 생성 같은 위험 패턴 차단 (D-001~D-006). |
+| `harness.blast.check` | PreToolUse / Edit\|Write\|apply_patch | `package.json`, `pyproject.toml` 등 의존성 manifest 변경 감지 → 알림. |
 | `harness.tooling.enforce` | PreToolUse / Bash | `cat`/`grep`/`find`/`sed` 직접 사용 → `Read`/`Grep`/`Glob`/`Edit` 대체 강제. |
 | `harness.worktree.port` | (직접 실행/API) | 워크트리 이름 기반 결정론적 포트 할당 (충돌 방지). |
 

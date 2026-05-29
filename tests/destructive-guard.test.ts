@@ -148,6 +148,42 @@ describe("destructive guard", () => {
 		});
 	});
 
+	it("denies risky apply_patch file mutations", () => {
+		expect(
+			evaluateDestructiveGuard({
+				toolName: "apply_patch",
+				toolInput: {
+					patch: [
+						"*** Begin Patch",
+						"*** Update File: .env.local",
+						"+TOKEN=secret",
+						"*** End Patch",
+					].join("\n"),
+				},
+			}),
+		).toMatchObject({
+			decision: "deny",
+			ruleId: "D-004",
+		});
+		expect(
+			evaluateDestructiveGuard({
+				toolName: "apply_patch",
+				toolInput: {
+					patch: [
+						"diff --git a/certs/client.pem b/certs/client.pem",
+						"--- a/certs/client.pem",
+						"+++ b/certs/client.pem",
+						"@@",
+						"+secret",
+					].join("\n"),
+				},
+			}),
+		).toMatchObject({
+			decision: "deny",
+			ruleId: "D-005",
+		});
+	});
+
 	it("warns for world writable permissions", () => {
 		for (const command of [
 			"chmod 777 scripts/deploy.sh",
@@ -209,6 +245,38 @@ describe("destructive guard", () => {
 				ruleId: "D-002",
 			},
 		});
+
+		store.close();
+	});
+
+	it("runs destructive guard as a companion for file mutation hooks", () => {
+		const store = openTempStore();
+
+		const result = dispatchHookEvent(store, {
+			sessionId: "session-edit-env",
+			lifecycle: "tool.execute.before",
+			matcher: "Edit",
+			ts: 100,
+			payload: {
+				host: "claude-code",
+				tool: "Edit",
+				raw: {
+					tool_input: { file_path: "/repo/.env.local" },
+				},
+			},
+			config: config(),
+		});
+
+		expect(result.hook.name).toBe("harness.blast.check");
+		expect(result.destructiveGuard).toMatchObject({
+			decision: "deny",
+			ruleId: "D-004",
+		});
+		expect(
+			store
+				.replay("session-edit-env")
+				.some((event) => event.type === "destructive.guard.evaluated"),
+		).toBe(true);
 
 		store.close();
 	});

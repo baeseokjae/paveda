@@ -80,7 +80,11 @@ function getHookName(eventName: ClaudeCodeHookEventName, payload: ClaudeCodeHook
 			if (payload.tool_name === "Bash") {
 				return "harness.destructive.guard";
 			}
-			if (payload.tool_name === "Edit" || payload.tool_name === "Write") {
+			if (
+				payload.tool_name === "Edit" ||
+				payload.tool_name === "Write" ||
+				payload.tool_name === "apply_patch"
+			) {
 				return "harness.blast.check";
 			}
 			return "paveda.lifecycle.tool.before";

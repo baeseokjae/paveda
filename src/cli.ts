@@ -86,6 +86,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			cwd: readOption(args, "--cwd"),
 			targetRoot: readOption(args, "--target-root"),
 			skills: parseOptionalCommaList(readOption(args, "--skills")),
+			includeOptional: args.includes("--include-optional"),
 			write: args.includes("--write"),
 			force: args.includes("--force"),
 			cliPath,
@@ -146,6 +147,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 					cwd: readOption(args, "--cwd"),
 					targetRoot: readOption(args, "--target-root"),
 					skills: parseOptionalCommaList(readOption(args, "--skills")),
+					includeOptional: args.includes("--include-optional"),
 					write: args.includes("--write"),
 					force: args.includes("--force"),
 				}),
@@ -1147,7 +1149,7 @@ Hosts:
   harness | claude-code | codex | pi | hermes
 
 Common flow:
-  init --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write] [--force]
+  init --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--include-optional] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write] [--force]
   adoption-report --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--runtime-smoke] [--db path] [--store-scope project|user] [--session id] [--json]
   doctor [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--json]
   skills status [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path]
@@ -1155,7 +1157,7 @@ Common flow:
 
 Host setup:
   install claude-code [--path .claude/settings.json] [--command "paveda hook claude-code"] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write]
-  skills install-bundle --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--write] [--force]
+  skills install-bundle --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--include-optional] [--write] [--force]
 
 Skill management:
   skills [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path]

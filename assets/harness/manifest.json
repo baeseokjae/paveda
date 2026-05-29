@@ -71,6 +71,30 @@
 			"name": "surgical-edits",
 			"path": "skills/surgical-edits",
 			"notes": "Diff discipline guardrail for code edits."
+		},
+		{
+			"name": "docs-writer",
+			"path": "skills/docs-writer",
+			"optional": true,
+			"notes": "Portable documentation planning, report, review, and drift-management workflow."
+		},
+		{
+			"name": "review",
+			"path": "skills/review",
+			"optional": true,
+			"notes": "Portable repository health and release-readiness review workflow."
+		},
+		{
+			"name": "browser-validate",
+			"path": "skills/browser-validate",
+			"optional": true,
+			"notes": "Portable browser validation workflow for UI changes with tool-based and manual fallbacks."
+		},
+		{
+			"name": "dead-code",
+			"path": "skills/dead-code",
+			"optional": true,
+			"notes": "Portable unused-code and unused-dependency investigation workflow."
 		}
 	]
 }

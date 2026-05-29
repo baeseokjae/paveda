@@ -95,6 +95,9 @@ Expected results:
 - `paveda skills` loads the packaged builtin core harness skills, including
   `/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, and
   `/surgical-edits`.
+- Optional portable skills such as `/docs-writer`, `/review`,
+  `/browser-validate`, and `/dead-code` are packaged and install only when
+  requested through `--include-optional` or explicit `--skills`.
 - `runtime-smoke` writes a synthetic hook session to EventStore and verifies
   replay plus session summary materialization without running project hooks.
 - Overlapping route commands against a fresh project store complete without

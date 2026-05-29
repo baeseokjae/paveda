@@ -134,7 +134,6 @@ describe("harness assets", () => {
 			/\bopus\b/i,
 			/\bsonnet\b/i,
 			/\bhaiku\b/i,
-			/docs-writer/,
 			/skills\.sh/,
 			/pnpm lint/,
 			/pnpm test/,

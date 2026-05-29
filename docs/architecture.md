@@ -5,7 +5,7 @@
 | 영역 | 책임 | 변경 빈도 |
 |---|---|---|
 | 호스트 (Claude Code, Codex, pi, Hermes) | 본체 — paveda 변경 없음 | 외부 |
-| **paveda (이 repo)** | canonical harness bundle, hook profile, skill loader, SQLite EventStore, PAL Router, /specify ambiguity 게이트 | 중간 |
+| **paveda (이 repo)** | canonical harness bundle, optional portable skills, hook profile, skill loader, SQLite EventStore, PAL Router, /specify ambiguity 게이트 | 중간 |
 | 프로젝트 도메인 hook/skill | docs / wiki / deploy 같은 프로젝트별 정책 | 자주 |
 | 외부 도메인 지식 저장소 | 도메인 지식 노드, 결정 기록 | 자주 |
 | SQLite EventStore (paveda 내부) | 운영 lineage, 비용 추적, instinct (옵션) | 매 세션 |
@@ -168,6 +168,8 @@ ambiguity-required: 0.2      # /specify 점수 임계값
 Scope priority: project override (`.harness/skills`, `.claude/skills`) > user override (`~/.harness/skills`) > Paveda canonical builtin (`assets/harness/skills`).
 
 Paveda의 기본 동작은 project-local skill 존재 여부에 의존하지 않는다. Project-local paths are extension points used only when a consumer project intentionally overrides or augments the packaged harness.
+
+Manifest skills can be marked `optional`. Default host bundle installs include only core workflow skills, while optional portable skills are installed through `--include-optional` or explicit `--skills`.
 
 ## 8. /specify ambiguity 게이트
 

@@ -76,6 +76,29 @@ describe("blast check", () => {
 		});
 	});
 
+	it("warns for apply_patch manifest and schema changes", () => {
+		expect(
+			evaluateBlastCheck({
+				toolName: "apply_patch",
+				toolInput: {
+					patch: [
+						"*** Begin Patch",
+						"*** Update File: package.json",
+						'+    "dependencies": { "typescript": "^5.6.0" },',
+						"*** Update File: db/schema.ts",
+						"+export const users = {};",
+						"*** End Patch",
+					].join("\n"),
+				},
+			}),
+		).toMatchObject({
+			warnings: [
+				"Dependency manifest change detected. Sync the project lockfile or dependency metadata.",
+				"Database schema change detected. Check whether a migration is required.",
+			],
+		});
+	});
+
 	it("records blast check evaluation through runtime dispatch", () => {
 		const store = openTempStore();
 
@@ -108,6 +131,47 @@ describe("blast check", () => {
 				additionalContext:
 					"Dependency manifest change detected. Sync the project lockfile or dependency metadata.",
 			},
+		});
+
+		store.close();
+	});
+
+	it("records apply_patch blast and destructive checks through runtime dispatch", () => {
+		const store = openTempStore();
+
+		const result = dispatchHookEvent(store, {
+			sessionId: "session-apply-patch",
+			lifecycle: "tool.execute.before",
+			matcher: "apply_patch",
+			ts: 100,
+			payload: {
+				host: "claude-code",
+				tool: "apply_patch",
+				raw: {
+					tool_input: {
+						patch: [
+							"*** Begin Patch",
+							"*** Update File: package.json",
+							'+    "dependencies": { "typescript": "^5.6.0" },',
+							"*** Update File: .env.local",
+							"+TOKEN=secret",
+							"*** End Patch",
+						].join("\n"),
+					},
+				},
+			},
+			config: config(),
+		});
+
+		expect(result.hook.name).toBe("harness.blast.check");
+		expect(result.blastCheck).toMatchObject({
+			warnings: [
+				"Dependency manifest change detected. Sync the project lockfile or dependency metadata.",
+			],
+		});
+		expect(result.destructiveGuard).toMatchObject({
+			decision: "deny",
+			ruleId: "D-004",
 		});
 
 		store.close();

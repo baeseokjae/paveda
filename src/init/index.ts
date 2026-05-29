@@ -18,6 +18,7 @@ export interface InitOptions {
 	host: HostSkillBundleTarget | string;
 	targetRoot?: string;
 	skills?: string[];
+	includeOptional?: boolean;
 	builtinRoots?: string[];
 	write?: boolean;
 	force?: boolean;
@@ -52,6 +53,7 @@ interface BuildNextCommandsInput {
 	write: boolean;
 	force: boolean;
 	skills?: string[];
+	includeOptional?: boolean;
 	targetRoot?: string;
 	cliPath?: string;
 	profile?: HookProfile;
@@ -74,6 +76,7 @@ export function initializePaveda(options: InitOptions): InitResult {
 		targetRoot: options.targetRoot,
 		builtinRoots: options.builtinRoots,
 		skills: options.skills,
+		includeOptional: options.includeOptional,
 		write: options.write,
 		force: options.force,
 	});
@@ -113,6 +116,7 @@ export function initializePaveda(options: InitOptions): InitResult {
 			write,
 			force,
 			skills: options.skills,
+			includeOptional: options.includeOptional,
 			targetRoot: options.targetRoot,
 			cliPath: options.cliPath,
 			profile: options.profile,
@@ -138,6 +142,7 @@ function buildNextCommands(input: BuildNextCommandsInput): InitNextCommand[] {
 			"--cwd",
 			cwd,
 			...(input.skills && input.skills.length > 0 ? ["--skills", input.skills.join(",")] : []),
+			...(input.includeOptional ? ["--include-optional"] : []),
 			...(input.targetRoot ? ["--target-root", shellQuote(input.targetRoot)] : []),
 			...(input.cliPath ? ["--cli-path", shellQuote(input.cliPath)] : []),
 			...(input.profile ? ["--profile", input.profile] : []),
