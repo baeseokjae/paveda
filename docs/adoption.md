@@ -143,12 +143,17 @@ the full `init` workflow:
 node dist/cli.js skills install-bundle --host codex --cwd /path/to/project
 node dist/cli.js skills install-bundle --host codex --cwd /path/to/project --write
 node dist/cli.js skills install-bundle --host codex --cwd /path/to/project --skills do,verify --write
+node dist/cli.js skills install-bundle --host codex --cwd /path/to/project --include-optional --write
 ```
 
 When writing a host bundle, Paveda rewrites canonical `.harness` skill and
 context paths to the target host directory. Compatibility paths under `.claude`
 are also rewritten when encountered. Project hook and check extension paths stay
 under `.harness/hooks` and `.harness/checks`.
+
+Optional portable skills are excluded from default installs. Use
+`--include-optional` to install all optional skills, or `--skills` to select a
+specific optional skill.
 
 If `--target-root` is provided, relative paths are resolved from `--cwd`.
 Generated skill path references use the resolved install location while context

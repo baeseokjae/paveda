@@ -24,6 +24,13 @@ Included skills:
 - `/pr`
 - `/surgical-edits`
 
+Optional portable skills:
+
+- `/docs-writer`
+- `/review`
+- `/browser-validate`
+- `/dead-code`
+
 Installers adapt skills, context modules, and instruction files into host-specific locations.
 Project-owned hooks and checks remain under `.harness/hooks` and `.harness/checks`,
 which are the runtime extension points Paveda executes.

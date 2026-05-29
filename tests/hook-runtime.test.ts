@@ -399,6 +399,22 @@ describe("Claude Code adapter", () => {
 		});
 	});
 
+	it("maps Claude Code apply_patch payloads to file mutation checks", () => {
+		expect(
+			fromClaudeCodeHookPayload({
+				hook_event_name: "PreToolUse",
+				session_id: "session-apply-patch",
+				tool_name: "apply_patch",
+				tool_input: { patch: "*** Update File: package.json" },
+			}),
+		).toMatchObject({
+			sessionId: "session-apply-patch",
+			lifecycle: "tool.execute.before",
+			matcher: "apply_patch",
+			hookName: "harness.blast.check",
+		});
+	});
+
 	it("marks Stop payloads as completed sessions", () => {
 		const store = openTempStore();
 		const input = fromClaudeCodeHookPayload({

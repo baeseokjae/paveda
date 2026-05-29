@@ -85,7 +85,7 @@ export const BUILT_IN_HOOKS: readonly HookDefinition[] = [
 	{
 		name: "harness.blast.check",
 		lifecycle: "tool.execute.before",
-		matcher: "Edit|Write",
+		matcher: "Edit|Write|apply_patch",
 		profiles: ["standard", "strict"],
 	},
 	{
@@ -110,6 +110,10 @@ export function dispatchHookEvent(
 	const config = sessionConfig.config;
 	const hook = resolveHookDefinition(input);
 	const primaryHookEnabled = isHookEnabled(hook, config);
+	const destructiveGuardCompanionHook = resolveCompanionHook(input, "harness.destructive.guard");
+	const destructiveGuardCompanionEnabled = destructiveGuardCompanionHook
+		? isHookEnabled(destructiveGuardCompanionHook, config)
+		: false;
 	const toolingEnforceEnabled = shouldEvaluateCompanionHook(
 		input,
 		config,
@@ -119,7 +123,7 @@ export function dispatchHookEvent(
 	const shouldSnapshotConfig =
 		input.lifecycle === "session.created" && !sessionConfig.snapshotExists;
 
-	if (!primaryHookEnabled && !toolingEnforceEnabled) {
+	if (!primaryHookEnabled && !destructiveGuardCompanionEnabled && !toolingEnforceEnabled) {
 		const events = shouldSnapshotConfig
 			? [
 					store.append({
@@ -133,10 +137,13 @@ export function dispatchHookEvent(
 		return { dispatched: false, reason: "disabled", hook, events };
 	}
 
-	const dispatchedHook =
-		primaryHookEnabled || !toolingEnforceEnabled
-			? hook
-			: (findBuiltInHook("harness.tooling.enforce") ?? hook);
+	const dispatchedHook = resolveDispatchedHook({
+		hook,
+		primaryHookEnabled,
+		destructiveGuardCompanionHook,
+		destructiveGuardCompanionEnabled,
+		toolingEnforceEnabled,
+	});
 	const projectHooksEnabled = input.projectHooks ?? config.projectHooks;
 	const sessionContext =
 		input.lifecycle === "session.created"
@@ -231,7 +238,10 @@ export function dispatchHookEvent(
 		);
 	}
 
-	if (primaryHookEnabled && hook.name === "harness.destructive.guard") {
+	if (
+		(primaryHookEnabled && hook.name === "harness.destructive.guard") ||
+		destructiveGuardCompanionEnabled
+	) {
 		destructiveGuard = evaluateDestructiveGuard(extractToolPayload(input.payload));
 		events.push(
 			store.append({
@@ -344,6 +354,28 @@ function findBuiltInHook(name: string): HookDefinition | undefined {
 	return BUILT_IN_HOOKS.find((hook) => hook.name === name);
 }
 
+function resolveDispatchedHook(input: {
+	hook: HookDefinition;
+	primaryHookEnabled: boolean;
+	destructiveGuardCompanionHook?: HookDefinition;
+	destructiveGuardCompanionEnabled: boolean;
+	toolingEnforceEnabled: boolean;
+}): HookDefinition {
+	if (input.primaryHookEnabled) {
+		return input.hook;
+	}
+
+	if (input.destructiveGuardCompanionEnabled && input.destructiveGuardCompanionHook) {
+		return input.destructiveGuardCompanionHook;
+	}
+
+	if (input.toolingEnforceEnabled) {
+		return findBuiltInHook("harness.tooling.enforce") ?? input.hook;
+	}
+
+	return input.hook;
+}
+
 function extractAgentSpawnPayload(payload: unknown): Record<string, unknown> {
 	if (!isRecord(payload)) {
 		return {};
@@ -395,6 +427,28 @@ function shouldEvaluateCompanionHook(
 
 	const hook = findBuiltInHook(hookName);
 	return hook ? isHookEnabled(hook, config) : false;
+}
+
+function resolveCompanionHook(
+	input: DispatchHookEventInput,
+	hookName: string,
+): HookDefinition | undefined {
+	if (
+		hookName !== "harness.destructive.guard" ||
+		input.lifecycle !== "tool.execute.before" ||
+		input.hookName === hookName ||
+		!input.matcher ||
+		!isFileMutationMatcher(input.matcher)
+	) {
+		return undefined;
+	}
+
+	const hook = findBuiltInHook(hookName);
+	return hook ? { ...hook, matcher: input.matcher } : undefined;
+}
+
+function isFileMutationMatcher(matcher: string): boolean {
+	return matcher === "Edit" || matcher === "Write" || matcher === "apply_patch";
 }
 
 function resolveSessionConfig(

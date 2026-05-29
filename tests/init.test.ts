@@ -64,7 +64,9 @@ describe("init", () => {
 		const dir = mkdtempSync(join(tmpdir(), `paveda-init-${hostCase.host}-`));
 		tempDirs.push(dir);
 		const manifest = readPackagedHarnessManifest();
-		const skillNames = manifest.skills.map((skill) => skill.name);
+		const skillNames = manifest.skills
+			.filter((skill) => !skill.optional)
+			.map((skill) => skill.name);
 		const contextModuleNames = manifest.contextModules.map((module) => basename(module.path));
 
 		const result = initializePaveda({

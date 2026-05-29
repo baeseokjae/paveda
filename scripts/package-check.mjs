@@ -25,6 +25,10 @@ const canonicalInstructionPath = readCanonicalInstructionPath(harnessManifest);
 const canonicalContextModulePaths = readCanonicalContextModulePaths(harnessManifest);
 const canonicalSkillEntries = readCanonicalSkillEntries(harnessManifest);
 const canonicalSkillNames = canonicalSkillEntries.map((skill) => skill.name);
+const canonicalCoreSkillEntries = canonicalSkillEntries.filter((skill) => !skill.optional);
+const canonicalOptionalSkillNames = canonicalSkillEntries
+	.filter((skill) => skill.optional)
+	.map((skill) => skill.name);
 const destination = process.env.PAVEDA_PACK_DESTINATION ?? tmpdir();
 const hostSmokeMatrix = [
 	{
@@ -151,7 +155,6 @@ const forbiddenContentPatterns = [
 	/claude-sonnet/i,
 	/claude-haiku/i,
 	/\.paveda\//i,
-	/docs-writer/,
 	/skills\.sh/,
 ];
 const blockedContentFragments = [
@@ -311,6 +314,7 @@ function readCanonicalSkillEntries(manifest) {
 	const skills = manifest.skills.map((skill) => ({
 		name: skill?.name,
 		path: skill?.path,
+		optional: Boolean(skill?.optional),
 	}));
 	const missingName = skills.some((skill) => typeof skill.name !== "string" || !skill.name);
 	if (missingName) {
@@ -1310,7 +1314,7 @@ function assertPackagedHostInit(cliPath, projectRoot, hostCase) {
 		assertFile(configPath);
 		assertIncludes(readFileSync(configPath, "utf8"), "    - .hermes/skills");
 	}
-	for (const skill of canonicalSkillEntries) {
+	for (const skill of canonicalCoreSkillEntries) {
 		const skillPath = smokePath(projectRoot, hostCase.skillRoot, skill.name, "SKILL.md");
 		assertFile(skillPath);
 		assertIncludes(readFileSync(skillPath, "utf8"), `name: ${skill.name}`);
@@ -1939,6 +1943,49 @@ function assertPackagedSkillsCli(cliPath, projectRoot, hostCase) {
 	);
 	assertProjectSkillStatus(status, "do", true);
 	assertProjectSkillStatus(status, "verify", false);
+
+	if (canonicalOptionalSkillNames.length > 0) {
+		const selectedOptionalSkills = canonicalOptionalSkillNames.slice(0, 2);
+		const optionalBundle = parseJson(
+			runCli(cliPath, [
+				"skills",
+				"install-bundle",
+				"--host",
+				hostCase.host,
+				"--cwd",
+				projectRoot,
+				"--skills",
+				selectedOptionalSkills.join(","),
+				"--write",
+				"--force",
+			]),
+			`${hostCase.host} optional skills install-bundle output`,
+		);
+		assertSkillNames(optionalBundle?.skills, selectedOptionalSkills);
+		for (const skillName of selectedOptionalSkills) {
+			assertFile(smokePath(projectRoot, hostCase.skillRoot, skillName, "SKILL.md"));
+		}
+
+		const includeOptionalProjectRoot = `${projectRoot}-include-optional`;
+		const includeOptionalBundle = parseJson(
+			runCli(cliPath, [
+				"skills",
+				"install-bundle",
+				"--host",
+				hostCase.host,
+				"--cwd",
+				includeOptionalProjectRoot,
+				"--include-optional",
+				"--write",
+				"--force",
+			]),
+			`${hostCase.host} include optional skills install-bundle output`,
+		);
+		assertSkillNames(includeOptionalBundle?.skills, canonicalSkillNames);
+		for (const skillName of canonicalOptionalSkillNames) {
+			assertFile(smokePath(includeOptionalProjectRoot, hostCase.skillRoot, skillName, "SKILL.md"));
+		}
+	}
 }
 
 function assertPackagedCustomTargetRoot(cliPath, projectRoot, hostCase, targetRoot) {

@@ -23,6 +23,10 @@ export function evaluateDestructiveGuard(
 		return evaluateFileMutation(input.toolInput);
 	}
 
+	if (input.toolName === "apply_patch") {
+		return evaluatePatch(input.toolInput);
+	}
+
 	return allow();
 }
 
@@ -92,6 +96,26 @@ function evaluateFileMutation(toolInput: unknown): DestructiveGuardResult {
 		return allow();
 	}
 
+	return evaluateMutatedPath(filePath);
+}
+
+function evaluatePatch(toolInput: unknown): DestructiveGuardResult {
+	const patch = readStringProperty(toolInput, "patch");
+	if (!patch) {
+		return allow();
+	}
+
+	for (const filePath of extractPatchFilePaths(patch)) {
+		const result = evaluateMutatedPath(filePath);
+		if (result.decision !== "allow") {
+			return result;
+		}
+	}
+
+	return allow();
+}
+
+function evaluateMutatedPath(filePath: string): DestructiveGuardResult {
 	const basename = filePath.split("/").at(-1) ?? filePath;
 
 	if (/^\.env(?:$|\.)/.test(basename) && !/\.example$/.test(basename)) {
@@ -168,6 +192,25 @@ function grantsWorldWritable(command: string): boolean {
 	}
 
 	return false;
+}
+
+function extractPatchFilePaths(patch: string): string[] {
+	const paths = new Set<string>();
+
+	for (const line of patch.split("\n")) {
+		const codexMatch = line.match(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/);
+		if (codexMatch?.[1]) {
+			paths.add(codexMatch[1].trim());
+			continue;
+		}
+
+		const unifiedMatch = line.match(/^(?:---|\+\+\+) [ab]\/(.+)$/);
+		if (unifiedMatch?.[1] && unifiedMatch[1] !== "/dev/null") {
+			paths.add(unifiedMatch[1].trim());
+		}
+	}
+
+	return [...paths];
 }
 
 function isWorldWritableMode(mode: string): boolean {

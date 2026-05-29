@@ -24,6 +24,7 @@ export interface InstallHostSkillBundleOptions extends LoadSkillsOptions {
 	host: HostSkillBundleTarget | string;
 	targetRoot?: string;
 	skills?: string[];
+	includeOptional?: boolean;
 	write?: boolean;
 	force?: boolean;
 }
@@ -77,7 +78,7 @@ export interface InstallHostSkillBundleResult {
 interface HarnessManifest {
 	instructions?: { path?: string };
 	contextModules?: Array<{ path?: string }>;
-	skills?: Array<{ name?: string }>;
+	skills?: Array<{ name?: string; optional?: boolean }>;
 }
 
 interface HostBundleConflict {
@@ -171,7 +172,10 @@ export function installHostSkillBundle(
 		userRoots: [],
 		builtinRoots: options.builtinRoots,
 	});
-	const canonicalSkills = selectManifestSkills(builtinSkills);
+	const canonicalSkills = selectManifestSkills(builtinSkills, {
+		includeOptional: Boolean(options.includeOptional),
+		selectedNames: options.skills,
+	});
 	const selectedSkills = selectSkills(canonicalSkills, options.skills);
 	const instructionFile = resolveInstructionFileEntry(
 		selectedSkills,
@@ -456,6 +460,7 @@ function selectSkills(
 
 function selectManifestSkills(
 	builtinSkills: ReturnType<typeof loadSkills>,
+	options: { includeOptional?: boolean; selectedNames?: string[] } = {},
 ): ReturnType<typeof loadSkills> {
 	const harnessRoot = resolveHarnessRoot(builtinSkills);
 	const manifest = harnessRoot ? readHarnessManifest(harnessRoot) : undefined;
@@ -463,7 +468,14 @@ function selectManifestSkills(
 		return builtinSkills;
 	}
 
+	const selectedNames = new Set(options.selectedNames ?? []);
 	return manifest.skills
+		.filter(
+			(entry) =>
+				!entry.optional ||
+				Boolean(options.includeOptional) ||
+				(entry.name ? selectedNames.has(entry.name) : false),
+		)
 		.map((entry) => entry.name)
 		.filter((name): name is string => Boolean(name))
 		.map((name) => {

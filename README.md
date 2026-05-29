@@ -24,7 +24,7 @@ Paveda는 agent workflow를 패키지 자체의 **canonical harness**로 제공�
 | `src/doctor/` | host bundle/readiness 점검 |
 | `src/checks/` | project checks, runtime smoke, adoption report |
 | `src/adapters/claude-code/` | Claude Code hook spec ↔ 추상 이벤트 매핑 |
-| `assets/harness/` | Paveda canonical harness bundle: `/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, guardrail skills |
+| `assets/harness/` | Paveda canonical harness bundle: core workflow skills plus optional portable skills |
 
 설계 문서:
 
@@ -97,6 +97,7 @@ smoke 수준으로 측정하고 spec의 비기능 목표를 넘으면 실패한�
 - tarball에 `assets/harness/context-modules/*.md` canonical context modules가 포함된다.
 - `pnpm exec paveda help`가 CLI 도움말을 출력한다.
 - packaged builtin core skills(`/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, `/surgical-edits`)가 로드된다.
+- optional portable skills(`/docs-writer`, `/review`, `/browser-validate`, `/dead-code`)는 `--include-optional` 또는 명시적 `--skills`로 설치된다.
 - `runtime-smoke`가 synthetic hook session을 EventStore에 기록하고 replay/status materialization을 확인한다.
 - `adoption-report`가 host readiness, `/do` route gate, runtime smoke를 한 JSON으로 요약하고, doctor 실패 시 실패한 체크 이름과 경로를 포함한다.
 - `init --host <host> --write`가 host bundle, context modules, instruction file을 생성하고 doctor 결과를 반환한다.
@@ -143,6 +144,8 @@ node dist/cli.js skills enable-router do --write
 node dist/cli.js skills install do
 node dist/cli.js skills install do --write
 node dist/cli.js skills install-bundle --host codex
+node dist/cli.js skills install-bundle --host codex --include-optional
+node dist/cli.js skills install-bundle --host codex --skills docs-writer,review
 node dist/cli.js skills install-bundle --host pi --write
 node dist/cli.js init --host codex --cwd /path/to/project
 node dist/cli.js init --host codex --cwd /path/to/project --write
@@ -163,9 +166,9 @@ doctor/adoption-report 복구 명령은 현재 실행 중인 CLI 경로를 사�
 `adoption-report`는 같은 검증 흐름을 하나로 묶어 보여준다. 기본은 읽기 전용이고,
 EventStore write path까지 확인하려면 `--runtime-smoke`를 명시한다.
 `skills status`는 selected/shadowed skill 후보와 router 활성 여부를 보여준다. `--host codex`처럼 host를 지정하면 해당 host skill root의 생성 산출물을 우선 검사한다. `skills install`은 기본 dry-run이며, `--write`를 붙이면 manifest에 선언된 Paveda builtin skill directory 전체를 `.harness/skills/<name>/`로 복사한다.
-`skills install-bundle`은 `assets/harness/manifest.json`에 선언된 canonical harness skills 전체 또는 `--skills do,verify`로 지정한 일부를 host별 기본 skill root에 설치한다. 기본 target은 `harness=.harness/skills`, `claude-code=.claude/skills`, `codex=.codex/skills`, `pi=.pi/skills`, `hermes=.hermes/skills`다. `--target-root`를 직접 지정하면 상대 경로는 `--cwd` 기준으로 해석되고, 생성된 skill path reference와 Hermes `skills.external_dirs`도 실제 설치 위치를 사용한다. 같은 custom root를 검증하려면 `doctor`, `skills status`, `route`, `adoption-report`에도 동일한 `--target-root`를 전달한다. 설치 시 skill/context/instruction path는 target host에 맞게 렌더링하고, project hook/check extension path는 Paveda 런타임이 실행하는 `.harness/hooks`, `.harness/checks`로 유지한다. canonical instruction과 context modules도 manifest 기준으로 host별 위치에 복사된다. `assets/harness/AGENTS.md`도 host instruction file로 렌더링된다: `harness=.harness/AGENTS.md`, `claude-code=.claude/CLAUDE.md`, `codex=AGENTS.md`, `pi=.pi/AGENTS.md`, `hermes=.hermes/AGENTS.md`. Codex bundle은 각 skill에 `agents/openai.yaml`도 생성하고, Hermes bundle은 `.hermes/config.yaml`의 `skills.external_dirs`에 설치된 skill root를 등록한다.
+`skills install-bundle`은 `assets/harness/manifest.json`에 선언된 canonical core skills 전체 또는 `--skills do,verify`로 지정한 일부를 host별 기본 skill root에 설치한다. Optional skills는 기본 설치에서 제외되며, `--include-optional`로 모두 포함하거나 `--skills docs-writer,review`처럼 명시적으로 선택한다. 기본 target은 `harness=.harness/skills`, `claude-code=.claude/skills`, `codex=.codex/skills`, `pi=.pi/skills`, `hermes=.hermes/skills`다. `--target-root`를 직접 지정하면 상대 경로는 `--cwd` 기준으로 해석되고, 생성된 skill path reference와 Hermes `skills.external_dirs`도 실제 설치 위치를 사용한다. 같은 custom root를 검증하려면 `doctor`, `skills status`, `route`, `adoption-report`에도 동일한 `--target-root`를 전달한다. 설치 시 skill/context/instruction path는 target host에 맞게 렌더링하고, project hook/check extension path는 Paveda 런타임이 실행하는 `.harness/hooks`, `.harness/checks`로 유지한다. canonical instruction과 context modules도 manifest 기준으로 host별 위치에 복사된다. `assets/harness/AGENTS.md`도 host instruction file로 렌더링된다: `harness=.harness/AGENTS.md`, `claude-code=.claude/CLAUDE.md`, `codex=AGENTS.md`, `pi=.pi/AGENTS.md`, `hermes=.hermes/AGENTS.md`. Codex bundle은 각 skill에 `agents/openai.yaml`도 생성하고, Hermes bundle은 `.hermes/config.yaml`의 `skills.external_dirs`에 설치된 skill root를 등록한다.
 `skills enable-router do`도 기본 dry-run이며, `--write`를 붙이면 선택된 `/do` skill의 `SKILL.md` frontmatter에 `router: enabled`와 `ambiguity-required`를 추가한다.
-Packaged builtin harness는 `/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, `/surgical-edits`를 포함한다. `/specify`는
+Packaged builtin harness는 core workflow인 `/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, `/surgical-edits`와 optional portable skills인 `/docs-writer`, `/review`, `/browser-validate`, `/dead-code`를 포함한다. `/specify`는
 goal/constraint/ontology clarity를 0~1로 평가하고, `/do`는 선택된 skill의
 `ambiguity-required` 임계값보다 높은 `--ambiguity-score`를 받으면
 `blocked: true`로 진입을 막는다.
