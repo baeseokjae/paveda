@@ -12,33 +12,31 @@ const DEPENDENCY_MANIFEST_WARNING =
 	"Dependency manifest change detected. Sync the project lockfile or dependency metadata.";
 
 export function evaluateBlastCheck(input: EvaluateBlastCheckInput): BlastCheckResult {
-	if (input.toolName !== "Edit" && input.toolName !== "Write") {
+	if (input.toolName !== "Edit" && input.toolName !== "Write" && input.toolName !== "apply_patch") {
 		return noWarnings();
 	}
 
-	const filePath = readStringProperty(input.toolInput, "file_path");
-	if (!filePath) {
+	const changes = extractFileChanges(input.toolName, input.toolInput);
+	if (changes.length === 0) {
 		return noWarnings();
 	}
 
-	const basename = filePath.split("/").at(-1) ?? filePath;
-	const content =
-		readStringProperty(input.toolInput, "new_string") ??
-		readStringProperty(input.toolInput, "content") ??
-		"";
 	const warnings: string[] = [];
 
-	if (looksLikeDependencyManifestChange(basename, content)) {
-		warnings.push(DEPENDENCY_MANIFEST_WARNING);
+	for (const change of changes) {
+		if (looksLikeDependencyManifestChange(change.basename, change.content)) {
+			warnings.push(DEPENDENCY_MANIFEST_WARNING);
+		}
+
+		if (/(schema\.ts|\.prisma)$/.test(change.basename)) {
+			warnings.push("Database schema change detected. Check whether a migration is required.");
+		}
 	}
 
-	if (/(schema\.ts|\.prisma)$/.test(basename)) {
-		warnings.push("Database schema change detected. Check whether a migration is required.");
-	}
-
+	const uniqueWarnings = [...new Set(warnings)];
 	return {
-		warnings,
-		additionalContext: warnings.length > 0 ? warnings.join("\n") : null,
+		warnings: uniqueWarnings,
+		additionalContext: uniqueWarnings.length > 0 ? uniqueWarnings.join("\n") : null,
 	};
 }
 
@@ -81,4 +79,55 @@ function readStringProperty(value: unknown, key: string): string | undefined {
 
 	const property = value[key as keyof typeof value];
 	return typeof property === "string" ? property : undefined;
+}
+
+function extractFileChanges(
+	toolName: string,
+	toolInput: unknown,
+): Array<{ basename: string; content: string }> {
+	if (toolName === "apply_patch") {
+		const patch = readStringProperty(toolInput, "patch");
+		if (!patch) {
+			return [];
+		}
+
+		return extractPatchFilePaths(patch).map((path) => ({
+			basename: path.split("/").at(-1) ?? path,
+			content: patch,
+		}));
+	}
+
+	const filePath = readStringProperty(toolInput, "file_path");
+	if (!filePath) {
+		return [];
+	}
+
+	return [
+		{
+			basename: filePath.split("/").at(-1) ?? filePath,
+			content:
+				readStringProperty(toolInput, "new_string") ??
+				readStringProperty(toolInput, "content") ??
+				"",
+		},
+	];
+}
+
+function extractPatchFilePaths(patch: string): string[] {
+	const paths = new Set<string>();
+
+	for (const line of patch.split("\n")) {
+		const codexMatch = line.match(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/);
+		if (codexMatch?.[1]) {
+			paths.add(codexMatch[1].trim());
+			continue;
+		}
+
+		const unifiedMatch = line.match(/^(?:---|\+\+\+) [ab]\/(.+)$/);
+		if (unifiedMatch?.[1] && unifiedMatch[1] !== "/dev/null") {
+			paths.add(unifiedMatch[1].trim());
+		}
+	}
+
+	return [...paths];
 }
