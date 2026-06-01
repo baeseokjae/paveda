@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -262,6 +263,10 @@ await runCliSmoke(tarball);
 console.log(`package check ok: ${tarball}`);
 
 function parsePackOutput(output) {
+	if (!output.trim()) {
+		return {};
+	}
+
 	const jsonStart = output.indexOf("{");
 	const jsonEnd = output.lastIndexOf("}");
 	if (jsonStart === -1 || jsonEnd === -1 || jsonEnd < jsonStart) {
@@ -347,6 +352,7 @@ async function runCliSmoke(tarballPath) {
 		assertPackagedBuiltinSkillInstall(cliPath, join(smokeRoot, "builtin-skill-install"));
 		assertPackagedEnableRouterCommand(cliPath, join(smokeRoot, "enable-router-command"));
 		assertPackagedPortCommand(cliPath);
+		assertPackagedPolicyBundleCommand(cliPath, join(smokeRoot, "policy-bundle-command"));
 		assertPackagedProjectCheckCommand(cliPath, join(smokeRoot, "project-check-command"));
 		await assertPackagedConcurrentRouteCommands(
 			cliPath,
@@ -358,6 +364,9 @@ async function runCliSmoke(tarballPath) {
 		assertIncludes(help, "adoption-report --host");
 		assertIncludes(help, "skills install-bundle --host");
 		assertIncludes(help, "runtime-smoke");
+		assertIncludes(help, "policy bundle");
+		assertIncludes(help, "policy pull");
+		assertIncludes(help, "--policy-cache path");
 		assertIncludes(help, "--store-scope project|user");
 		assertIncludes(help, "instincts add --scope");
 		assertIncludes(help, "Commands that can write project files require --write.");
@@ -993,6 +1002,64 @@ function assertPackagedHookRuntime(cliPath, dbPath, projectRoot) {
 		!deniedKeyWrite.hookSpecificOutput.permissionDecisionReason.includes("D-005")
 	) {
 		fail("packaged CLI smoke failed: destructive guard did not deny key file writes");
+	}
+	const deniedCodexEnvWrite = parseJson(
+		runCliWithInput(
+			cliPath,
+			["hook", "codex", "--db", dbPath],
+			JSON.stringify({
+				hook_event_name: "PreToolUse",
+				session_id: "packaged-codex-denied-env-session",
+				cwd: projectRoot,
+				tool_name: "Bash",
+				tool_input: { command: "printf 'DEBUG=1' > .env.local" },
+			}),
+		),
+		"codex denied .env write hook output",
+	);
+	if (
+		deniedCodexEnvWrite?.hookSpecificOutput?.permissionDecision !== "deny" ||
+		!deniedCodexEnvWrite.hookSpecificOutput.permissionDecisionReason.includes("D-001")
+	) {
+		fail("packaged CLI smoke failed: Codex hook response did not deny direct .env writes");
+	}
+	const deniedHermesRm = parseJson(
+		runCliWithInput(
+			cliPath,
+			["hook", "hermes", "--db", dbPath],
+			JSON.stringify({
+				hook_event_name: "pre_tool_call",
+				session_id: "packaged-hermes-denied-rm-session",
+				cwd: projectRoot,
+				tool_name: "terminal",
+				tool_input: { command: "rm -rf /" },
+			}),
+		),
+		"hermes denied rm hook output",
+	);
+	if (
+		deniedHermesRm?.action !== "block" ||
+		deniedHermesRm?.decision !== "block" ||
+		!deniedHermesRm.reason.includes("D-003")
+	) {
+		fail("packaged CLI smoke failed: Hermes hook response did not block high-risk rm");
+	}
+	const deniedPiEnvWrite = parseJson(
+		runCliWithInput(
+			cliPath,
+			["hook", "pi", "--db", dbPath],
+			JSON.stringify({
+				event_name: "tool_call",
+				session_id: "packaged-pi-denied-env-session",
+				cwd: projectRoot,
+				toolName: "write",
+				input: { path: ".env.local", content: "DEBUG=1" },
+			}),
+		),
+		"pi denied .env write hook output",
+	);
+	if (deniedPiEnvWrite?.block !== true || !deniedPiEnvWrite.reason.includes("D-004")) {
+		fail("packaged CLI smoke failed: Pi hook response did not block direct .env writes");
 	}
 	const warnedChmod = parseJson(
 		runCliWithInput(
@@ -2569,6 +2636,217 @@ function assertPackagedPortCommand(cliPath) {
 		].join("\n")
 	) {
 		fail("packaged CLI smoke failed: port shell output did not match JSON output");
+	}
+}
+
+function assertPackagedPolicyBundleCommand(cliPath, workDir) {
+	mkdirSync(workDir, { recursive: true });
+
+	const bundle = parseJson(
+		runCli(cliPath, [
+			"policy",
+			"bundle",
+			"--issuer",
+			"package-smoke",
+			"--generated-at",
+			"2026-06-01T00:00:00.000Z",
+		]),
+		"policy bundle output",
+	);
+	if (
+		bundle?.bundle?.schemaVersion !== 1 ||
+		bundle?.bundle?.issuer !== "package-smoke" ||
+		bundle?.bundle?.generatedAt !== "2026-06-01T00:00:00.000Z" ||
+		!/^[a-f0-9]{64}$/.test(bundle?.canonicalSha256 ?? "")
+	) {
+		fail("packaged CLI smoke failed: policy bundle did not return the expected artifact");
+	}
+	if (!bundle.bundle.rules.some((rule) => rule?.id === "workflow.verification.handoff-gate")) {
+		fail("packaged CLI smoke failed: policy bundle did not include workflow policy rules");
+	}
+	if (!bundle.bundle.hostCapabilities.some((capability) => capability?.host === "codex")) {
+		fail("packaged CLI smoke failed: policy bundle did not include host capabilities");
+	}
+
+	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+	const oldKey = generateKeyPairSync("ed25519");
+	const privateKeyPath = join(workDir, "policy-private.pem");
+	const publicKeyPath = join(workDir, "policy-public.pem");
+	const keyringPath = join(workDir, "policy-keyring.json");
+	const signedBundlePath = join(workDir, "policy-signed.json");
+	const cachePath = join(workDir, "policy-cache.json");
+	writeFileSync(privateKeyPath, privateKey.export({ format: "pem", type: "pkcs8" }));
+	writeFileSync(publicKeyPath, publicKey.export({ format: "pem", type: "spki" }));
+	writeFileSync(
+		keyringPath,
+		`${JSON.stringify(
+			{
+				keys: [
+					{
+						keyId: "old-package-smoke-key",
+						publicKeyPem: oldKey.publicKey.export({ format: "pem", type: "spki" }).toString(),
+					},
+					{
+						keyId: "package-smoke-key",
+						publicKeyPem: publicKey.export({ format: "pem", type: "spki" }).toString(),
+					},
+				],
+			},
+			null,
+			2,
+		)}\n`,
+	);
+
+	runCli(cliPath, [
+		"policy",
+		"bundle",
+		"--issuer",
+		"package-smoke",
+		"--generated-at",
+		"2026-06-01T00:00:00.000Z",
+		"--private-key",
+		privateKeyPath,
+		"--key-id",
+		"package-smoke-key",
+		"--write",
+		signedBundlePath,
+	]);
+
+	const signedBundle = parseJson(readFileSync(signedBundlePath, "utf8"), "signed policy bundle");
+	if (
+		signedBundle?.signature?.algorithm !== "ed25519" ||
+		signedBundle?.signature?.keyId !== "package-smoke-key"
+	) {
+		fail("packaged CLI smoke failed: policy bundle did not include an Ed25519 signature");
+	}
+
+	const verified = parseJson(
+		runCli(cliPath, [
+			"policy",
+			"verify",
+			"--bundle",
+			signedBundlePath,
+			"--public-key",
+			publicKeyPath,
+		]),
+		"policy verify output",
+	);
+	if (
+		verified?.ok !== true ||
+		verified?.keyId !== "package-smoke-key" ||
+		verified?.expectedSha256 !== signedBundle.canonicalSha256
+	) {
+		fail("packaged CLI smoke failed: policy verify did not accept the signed bundle");
+	}
+
+	const pulled = parseJson(
+		runCli(cliPath, [
+			"policy",
+			"pull",
+			"--source",
+			signedBundlePath,
+			"--keyring",
+			keyringPath,
+			"--cache",
+			cachePath,
+			"--write",
+		]),
+		"policy pull output",
+	);
+	if (
+		pulled?.verification?.ok !== true ||
+		pulled?.summary?.keyId !== "package-smoke-key" ||
+		pulled?.cache?.written !== true
+	) {
+		fail("packaged CLI smoke failed: policy pull did not verify and cache the signed bundle");
+	}
+	const cache = parseJson(readFileSync(cachePath, "utf8"), "policy cache output");
+	if (
+		cache?.verification?.ok !== true ||
+		cache?.summary?.canonicalSha256 !== signedBundle.canonicalSha256 ||
+		cache?.signedBundle?.canonicalSha256 !== signedBundle.canonicalSha256
+	) {
+		fail("packaged CLI smoke failed: policy pull cache did not contain the signed bundle");
+	}
+
+	const policyDoctor = parseJson(
+		runCliResult(cliPath, [
+			"doctor",
+			"--host",
+			"codex",
+			"--cwd",
+			workDir,
+			"--enforcement",
+			"--policy-cache",
+			cachePath,
+			"--json",
+		]).stdout,
+		"policy source doctor output",
+	);
+	const policySourceCheck = policyDoctor?.checks?.find((check) => check?.name === "policy-source");
+	if (
+		policySourceCheck?.status !== "pass" ||
+		policySourceCheck?.details?.policySource?.keyId !== "package-smoke-key" ||
+		policySourceCheck?.details?.runtimeDrift?.ok !== true
+	) {
+		fail("packaged CLI smoke failed: doctor did not expose the verified policy cache source");
+	}
+
+	const policyAdoption = parseJson(
+		runCliResult(cliPath, [
+			"adoption-report",
+			"--host",
+			"codex",
+			"--cwd",
+			workDir,
+			"--policy-cache",
+			cachePath,
+			"--json",
+		]).stdout,
+		"policy source adoption-report output",
+	);
+	const adoptionPolicySourceCheck = policyAdoption?.checks?.find(
+		(check) => check?.name === "policy-source",
+	);
+	if (
+		adoptionPolicySourceCheck?.status !== "pass" ||
+		adoptionPolicySourceCheck?.details?.policySource?.keyId !== "package-smoke-key" ||
+		adoptionPolicySourceCheck?.details?.runtimeDrift?.ok !== true
+	) {
+		fail("packaged CLI smoke failed: adoption-report did not expose the policy cache source");
+	}
+
+	const policyHookDbPath = join(workDir, "policy-hook.db");
+	runCliWithInput(
+		cliPath,
+		["hook", "claude-code", "--db", policyHookDbPath],
+		JSON.stringify({
+			hook_event_name: "PreToolUse",
+			session_id: "packaged-policy-source-session",
+			cwd: workDir,
+			tool_name: "Bash",
+			tool_input: { command: "rm -rf /" },
+		}),
+		{ env: { PAVEDA_POLICY_CACHE: cachePath } },
+	);
+	const policyEvents = parseJson(
+		runCli(cliPath, [
+			"events",
+			"--session",
+			"packaged-policy-source-session",
+			"--db",
+			policyHookDbPath,
+		]),
+		"policy source hook events",
+	);
+	const policyDecisionEvent = policyEvents.find((event) => event?.type === "policy.decision");
+	if (
+		policyDecisionEvent?.payload?.evidence?.policySource?.type !== "bundle-cache" ||
+		policyDecisionEvent.payload.evidence.policySource.keyId !== "package-smoke-key" ||
+		policyDecisionEvent.payload.evidence.policySource.canonicalSha256 !==
+			signedBundle.canonicalSha256
+	) {
+		fail("packaged CLI smoke failed: hook runtime did not attach verified policy cache source");
 	}
 }
 

@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { stdin } from "node:process";
 import { fromClaudeCodeHookPayload } from "./adapters/claude-code/index.js";
+import { fromCodexHookPayload } from "./adapters/codex/index.js";
+import { fromHermesHookPayload } from "./adapters/hermes/index.js";
+import { fromPiHookPayload } from "./adapters/pi/index.js";
 import { runProjectChecks } from "./checks/project-checks.js";
 import { loadConfig, parseHookProfile } from "./core/index.js";
 import { formatDoctorReport, runDoctor } from "./doctor/index.js";
@@ -16,6 +20,23 @@ import {
 } from "./host-bundles/index.js";
 import { initializePaveda } from "./init/index.js";
 import { installClaudeCode } from "./install/claude-code.js";
+import { installCodex } from "./install/codex.js";
+import { installHermes } from "./install/hermes.js";
+import { installPi } from "./install/pi.js";
+import { serveMcpStdio } from "./mcp/server.js";
+import {
+	type AgentEvent,
+	type PolicyDecision,
+	type TrustedPolicyKey,
+	assertSignedPolicyBundle,
+	createPolicyBundle,
+	createPolicyBundleArtifact,
+	createPolicyBundleCacheEntry,
+	fetchSignedPolicyBundle,
+	signPolicyBundle,
+	summarizePolicyBundle,
+	verifySignedPolicyBundleWithKeyring,
+} from "./policy/index.js";
 import { recordRouteDecision, routeSkill } from "./router/index.js";
 import {
 	enableSkillRouter,
@@ -55,6 +76,57 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 
 	if (command === "install") {
 		const host = args[0];
+		if (host === "codex") {
+			const explicitCommand = readOption(args, "--command");
+			printJson(
+				installCodex({
+					path: readOption(args, "--path"),
+					command: explicitCommand,
+					cliPath:
+						readOption(args, "--cli-path") ?? (explicitCommand ? undefined : currentCliPath()),
+					managed: args.includes("--managed"),
+					requirementsPath: readOption(args, "--requirements-path"),
+					managedDir: readOption(args, "--managed-dir"),
+					allowManagedHooksOnly: !args.includes("--allow-unmanaged-hooks"),
+					write: args.includes("--write"),
+					force: args.includes("--force"),
+				}),
+			);
+			return;
+		}
+
+		if (host === "hermes") {
+			const explicitCommand = readOption(args, "--command");
+			printJson(
+				installHermes({
+					configPath: readOption(args, "--config-path"),
+					hookPath: readOption(args, "--hook-path"),
+					command: explicitCommand,
+					cliPath:
+						readOption(args, "--cli-path") ?? (explicitCommand ? undefined : currentCliPath()),
+					hooksAutoAccept: args.includes("--auto-accept-hooks"),
+					write: args.includes("--write"),
+					force: args.includes("--force"),
+				}),
+			);
+			return;
+		}
+
+		if (host === "pi") {
+			const explicitCommand = readOption(args, "--command");
+			printJson(
+				installPi({
+					extensionPath: readOption(args, "--extension-path"),
+					command: explicitCommand,
+					cliPath:
+						readOption(args, "--cli-path") ?? (explicitCommand ? undefined : currentCliPath()),
+					write: args.includes("--write"),
+					force: args.includes("--force"),
+				}),
+			);
+			return;
+		}
+
 		if (host !== "claude-code") {
 			throw new Error(`Unsupported install host: ${host ?? ""}`);
 		}
@@ -195,6 +267,8 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			host: readOption(args, "--host"),
 			targetRoot: readOption(args, "--target-root"),
 			cliCommand: currentCliCommand(),
+			enforcement: args.includes("--enforcement"),
+			policyCachePath: readOption(args, "--policy-cache"),
 		});
 
 		if (args.includes("--json")) {
@@ -225,6 +299,92 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			process.exitCode = 1;
 		}
 		return;
+	}
+
+	if (command === "mcp") {
+		const subcommand = args[0];
+		if (subcommand !== "serve") {
+			throw new Error(`Unsupported mcp command: ${subcommand ?? ""}`);
+		}
+		await serveMcpStdio({
+			cwd: readOption(args, "--cwd"),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+			sessionId: readOption(args, "--session"),
+		});
+		return;
+	}
+
+	if (command === "policy") {
+		const subcommand = args[0];
+
+		if (subcommand === "bundle") {
+			const generatedAt = parseOptionalDate(readOption(args, "--generated-at"), "--generated-at");
+			const bundle = createPolicyBundle({
+				issuer: readOption(args, "--issuer"),
+				generatedAt,
+				version: readOption(args, "--runtime-version"),
+			});
+			const privateKeyPath = readOption(args, "--private-key");
+			const output = privateKeyPath
+				? signPolicyBundle(bundle, {
+						privateKeyPem: readTextFile(privateKeyPath, "--private-key"),
+						keyId: readOption(args, "--key-id"),
+					})
+				: createPolicyBundleArtifact(bundle);
+			const writePath = readOption(args, "--write");
+
+			writeJsonOrPrint(output, writePath);
+			return;
+		}
+
+		if (subcommand === "verify") {
+			const signedBundle = assertSignedPolicyBundle(
+				readJsonFile(requireOption(args, "--bundle"), "--bundle"),
+			);
+			const result = verifySignedPolicyBundleWithKeyring(signedBundle, {
+				keys: readTrustedPolicyKeys(args),
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+
+		if (subcommand === "pull") {
+			const source = requireOption(args, "--source");
+			const signedBundle = await fetchSignedPolicyBundle(source);
+			const verification = verifySignedPolicyBundleWithKeyring(signedBundle, {
+				keys: readTrustedPolicyKeys(args),
+			});
+			const cachePath = readOption(args, "--cache");
+			const cacheEntry = createPolicyBundleCacheEntry(signedBundle, verification, { source });
+			const output = {
+				source,
+				summary: summarizePolicyBundle(signedBundle),
+				verification,
+				cache: cachePath
+					? {
+							path: cachePath,
+							written: verification.ok && args.includes("--write"),
+						}
+					: undefined,
+			};
+
+			if (verification.ok && cachePath && args.includes("--write")) {
+				assertWritePathIsSafe(cachePath);
+				writeTextFileSafely(cachePath, `${JSON.stringify(cacheEntry, null, 2)}\n`);
+			}
+
+			printJson(output);
+			if (!verification.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+
+		throw new Error(`Unsupported policy command: ${subcommand ?? ""}`);
 	}
 
 	if (command === "runtime-smoke") {
@@ -259,6 +419,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			dbPath: readOption(args, "--db"),
 			sessionId: readOption(args, "--session"),
 			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+			policyCachePath: readOption(args, "--policy-cache"),
 		});
 
 		if (args.includes("--json")) {
@@ -279,10 +440,11 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 
 	preflightStoreBackedCommand(command, args);
 
+	const hookHost = command === "hook" ? args[0] : undefined;
 	const hookConfig = command === "hook" ? loadConfig() : undefined;
 	const hookDispatchInput =
 		command === "hook"
-			? { ...fromClaudeCodeHookPayload(await readHookPayload()), config: hookConfig }
+			? { ...parseHookPayloadForHost(hookHost, await readHookPayload()), config: hookConfig }
 			: undefined;
 	const { EventStore, resolveStorePath } = await import("./store/index.js");
 	const cwd = readOption(args, "--cwd") ?? readHookPayloadCwd(hookDispatchInput);
@@ -434,7 +596,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 
 		if (command === "hook") {
 			const host = args[0];
-			if (host !== "claude-code") {
+			if (host !== "claude-code" && host !== "codex" && host !== "hermes" && host !== "pi") {
 				throw new Error(`Unsupported hook host: ${host ?? ""}`);
 			}
 			if (!hookDispatchInput) {
@@ -442,7 +604,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			}
 
 			const result = dispatchHookEvent(store, hookDispatchInput);
-			printJson(toClaudeCodeHookResponse(result));
+			printJson(toHostHookResponse(host, result));
 			return;
 		}
 
@@ -539,7 +701,7 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 
 	if (command === "hook") {
 		const host = args[0];
-		if (host !== "claude-code") {
+		if (host !== "claude-code" && host !== "codex" && host !== "hermes" && host !== "pi") {
 			throw new Error(`Unsupported hook host: ${host ?? ""}`);
 		}
 	}
@@ -819,6 +981,18 @@ function parseOptionalJson(value: string | undefined, name: string): unknown {
 	}
 }
 
+function parseOptionalDate(value: string | undefined, name: string): string | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+
+	if (!Number.isFinite(Date.parse(value))) {
+		throw new Error(`${name} must be a valid date`);
+	}
+
+	return value;
+}
+
 function parseOptionalSince(value: string | undefined, now = Date.now()): number | undefined {
 	if (value === undefined) {
 		return undefined;
@@ -855,6 +1029,77 @@ function parseOptionalSince(value: string | undefined, now = Date.now()): number
 
 function printJson(value: unknown): void {
 	console.log(JSON.stringify(value, null, 2));
+}
+
+function writeJsonOrPrint(value: unknown, writePath: string | undefined): void {
+	const output = `${JSON.stringify(value, null, 2)}\n`;
+	if (writePath) {
+		assertWritePathIsSafe(writePath);
+		writeTextFileSafely(writePath, output);
+		return;
+	}
+
+	process.stdout.write(output);
+}
+
+function readTextFile(path: string, name: string): string {
+	try {
+		return readFileSync(path, "utf8");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Unable to read ${name}: ${message}`);
+	}
+}
+
+function readJsonFile(path: string, name: string): unknown {
+	try {
+		return JSON.parse(readTextFile(path, name)) as unknown;
+	} catch (error) {
+		if (error instanceof SyntaxError) {
+			throw new Error(`${name} must be valid JSON`);
+		}
+		throw error;
+	}
+}
+
+function readTrustedPolicyKeys(args: string[]): TrustedPolicyKey[] {
+	const keyringPath = readOption(args, "--keyring");
+	if (keyringPath) {
+		return parsePolicyKeyring(readJsonFile(keyringPath, "--keyring"));
+	}
+
+	const publicKeyPath = readOption(args, "--public-key");
+	if (!publicKeyPath) {
+		throw new Error("Missing required option: --public-key or --keyring");
+	}
+
+	const keyId = readOption(args, "--key-id");
+	return [
+		{
+			publicKeyPem: readTextFile(publicKeyPath, "--public-key"),
+			...(keyId ? { keyId } : {}),
+		},
+	];
+}
+
+function parsePolicyKeyring(value: unknown): TrustedPolicyKey[] {
+	if (!isRecord(value) || !Array.isArray(value.keys)) {
+		throw new Error("--keyring must be a JSON object with a keys array");
+	}
+
+	return value.keys.map((key, index) => {
+		if (!isRecord(key) || typeof key.publicKeyPem !== "string") {
+			throw new Error(`--keyring keys[${index}] must include publicKeyPem`);
+		}
+		if (key.keyId !== undefined && typeof key.keyId !== "string") {
+			throw new Error(`--keyring keys[${index}].keyId must be a string`);
+		}
+
+		return {
+			publicKeyPem: key.publicKeyPem,
+			...(key.keyId ? { keyId: key.keyId } : {}),
+		};
+	});
 }
 
 function formatStatusMarkdown(sessions: readonly SessionSummary[]): string {
@@ -1022,6 +1267,29 @@ async function readHookPayload(): Promise<Record<string, unknown>> {
 	return payload;
 }
 
+function parseHookPayloadForHost(
+	host: string | undefined,
+	payload: Record<string, unknown>,
+): DispatchHookEventInput {
+	if (host === "claude-code") {
+		return fromClaudeCodeHookPayload(payload);
+	}
+
+	if (host === "codex") {
+		return fromCodexHookPayload(payload);
+	}
+
+	if (host === "hermes") {
+		return fromHermesHookPayload(payload);
+	}
+
+	if (host === "pi") {
+		return fromPiHookPayload(payload);
+	}
+
+	throw new Error(`Unsupported hook host: ${host ?? ""}`);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -1037,34 +1305,40 @@ function toClaudeCodeHookResponse(value: ReturnType<typeof dispatchHookEvent>): 
 		};
 	}
 
-	if (value.costGuard?.additionalContext) {
+	const blockingDecision = pickPolicyDecision(value.policyEvaluation?.decisions, "deny");
+	if (blockingDecision?.enforced) {
 		return {
 			...value,
 			hookSpecificOutput: {
-				hookEventName: "PostToolUse",
-				additionalContext: value.costGuard.additionalContext,
+				hookEventName: toClaudeCodeHookEventName(value.agentEvent, "PreToolUse"),
+				permissionDecision: "deny",
+				permissionDecisionReason: blockingDecision.reason,
 			},
 		};
 	}
 
-	if (value.destructiveGuard?.decision === "deny") {
+	const askDecision = pickPolicyDecision(value.policyEvaluation?.decisions, "ask");
+	if (askDecision) {
 		return {
 			...value,
 			hookSpecificOutput: {
-				hookEventName: "PreToolUse",
-				permissionDecision: "deny",
-				permissionDecisionReason: value.destructiveGuard.reason,
+				hookEventName: toClaudeCodeHookEventName(value.agentEvent, "PreToolUse"),
+				permissionDecision: "ask",
+				permissionDecisionReason: askDecision.reason,
 			},
 		};
 	}
 
-	if (value.toolingEnforce?.decision === "deny") {
+	const requiredStepDecision = pickPolicyDecision(
+		value.policyEvaluation?.decisions,
+		"require_step",
+	);
+	if (requiredStepDecision) {
 		return {
 			...value,
 			hookSpecificOutput: {
-				hookEventName: "PreToolUse",
-				permissionDecision: "deny",
-				permissionDecisionReason: value.toolingEnforce.reason,
+				hookEventName: toClaudeCodeHookEventName(value.agentEvent, "PreToolUse"),
+				additionalContext: requiredStepDecision.reason,
 			},
 		};
 	}
@@ -1075,6 +1349,17 @@ function toClaudeCodeHookResponse(value: ReturnType<typeof dispatchHookEvent>): 
 		return {
 			...value,
 			...projectHookResponse,
+		};
+	}
+
+	const contextDecision = pickPolicyContextDecision(value.policyEvaluation?.decisions);
+	if (contextDecision) {
+		return {
+			...value,
+			hookSpecificOutput: {
+				hookEventName: toClaudeCodeHookEventName(value.agentEvent, "PreToolUse"),
+				additionalContext: contextDecision.reason,
+			},
 		};
 	}
 
@@ -1099,6 +1384,272 @@ function toClaudeCodeHookResponse(value: ReturnType<typeof dispatchHookEvent>): 
 	}
 
 	return value;
+}
+
+function toHostHookResponse(
+	host: "claude-code" | "codex" | "hermes" | "pi",
+	value: ReturnType<typeof dispatchHookEvent>,
+): unknown {
+	switch (host) {
+		case "claude-code":
+			return toClaudeCodeHookResponse(value);
+		case "codex":
+			return toCodexHookResponse(value);
+		case "hermes":
+			return toHermesHookResponse(value);
+		case "pi":
+			return toPiHookResponse(value);
+	}
+}
+
+function toCodexHookResponse(value: ReturnType<typeof dispatchHookEvent>): unknown {
+	if (value.sessionContext) {
+		return {
+			...value,
+			hookSpecificOutput: {
+				hookEventName: "SessionStart",
+				additionalContext: value.sessionContext.additionalContext,
+			},
+		};
+	}
+
+	const blockingDecision = pickPolicyDecision(value.policyEvaluation?.decisions, "deny");
+	if (blockingDecision?.enforced) {
+		return {
+			...value,
+			...codexBlockingOutput(value.agentEvent, blockingDecision),
+		};
+	}
+
+	const requiredStepDecision = pickPolicyDecision(
+		value.policyEvaluation?.decisions,
+		"require_step",
+	);
+	if (requiredStepDecision) {
+		return {
+			...value,
+			hookSpecificOutput: {
+				hookEventName: toCodexHookEventName(value.agentEvent, "PostToolUse"),
+				additionalContext: requiredStepDecision.reason,
+			},
+		};
+	}
+
+	const projectHookResponse = pickProjectHookResponse(value.projectHooks?.executions);
+
+	if (projectHookResponse) {
+		return {
+			...value,
+			...projectHookResponse,
+		};
+	}
+
+	const contextDecision = pickPolicyContextDecision(value.policyEvaluation?.decisions);
+	if (contextDecision) {
+		return {
+			...value,
+			hookSpecificOutput: {
+				hookEventName: toCodexHookEventName(value.agentEvent, "PreToolUse"),
+				additionalContext: contextDecision.reason,
+			},
+		};
+	}
+
+	return value;
+}
+
+function toHermesHookResponse(value: ReturnType<typeof dispatchHookEvent>): unknown {
+	const blockingDecision = pickPolicyDecision(value.policyEvaluation?.decisions, "deny");
+	if (blockingDecision?.enforced) {
+		return {
+			...value,
+			action: "block",
+			message: blockingDecision.reason,
+			decision: "block",
+			reason: blockingDecision.reason,
+		};
+	}
+
+	const requiredStepDecision = pickPolicyDecision(
+		value.policyEvaluation?.decisions,
+		"require_step",
+	);
+	if (requiredStepDecision) {
+		return {
+			...value,
+			context: requiredStepDecision.reason,
+		};
+	}
+
+	const contextDecision = pickPolicyContextDecision(value.policyEvaluation?.decisions);
+	if (contextDecision) {
+		return {
+			...value,
+			context: contextDecision.reason,
+		};
+	}
+
+	return value;
+}
+
+function toPiHookResponse(value: ReturnType<typeof dispatchHookEvent>): unknown {
+	const blockingDecision = pickPolicyDecision(value.policyEvaluation?.decisions, "deny");
+	if (blockingDecision?.enforced) {
+		return {
+			...value,
+			block: true,
+			reason: blockingDecision.reason,
+		};
+	}
+
+	const requiredStepDecision = pickPolicyDecision(
+		value.policyEvaluation?.decisions,
+		"require_step",
+	);
+	if (requiredStepDecision) {
+		return {
+			...value,
+			message: piPolicyMessage(requiredStepDecision),
+		};
+	}
+
+	const contextDecision = pickPolicyContextDecision(value.policyEvaluation?.decisions);
+	if (contextDecision) {
+		return {
+			...value,
+			message: piPolicyMessage(contextDecision),
+		};
+	}
+
+	return value;
+}
+
+function piPolicyMessage(decision: PolicyDecision): Record<string, unknown> {
+	return {
+		customType: "paveda-policy",
+		content: decision.reason,
+		display: true,
+	};
+}
+
+function pickPolicyDecision(
+	decisions: readonly PolicyDecision[] | undefined,
+	action: PolicyDecision["action"],
+): PolicyDecision | undefined {
+	return decisions?.find((decision) => decision.action === action);
+}
+
+function pickPolicyContextDecision(
+	decisions: readonly PolicyDecision[] | undefined,
+): PolicyDecision | undefined {
+	return decisions?.find(
+		(decision) => decision.action === "warn" || decision.action === "record_only",
+	);
+}
+
+function toClaudeCodeHookEventName(
+	event: AgentEvent | undefined,
+	fallback: "SessionStart" | "PreToolUse" | "PostToolUse" | "Stop",
+): "SessionStart" | "PreToolUse" | "PostToolUse" | "Stop" {
+	if (!event) {
+		return fallback;
+	}
+
+	switch (event.kind) {
+		case "session.started":
+			return "SessionStart";
+		case "tool.requested":
+		case "file.mutated":
+		case "prompt.submitted":
+			return "PreToolUse";
+		case "tool.completed":
+		case "verification.completed":
+			return "PostToolUse";
+		case "session.stopped":
+			return "Stop";
+	}
+}
+
+function codexBlockingOutput(
+	event: AgentEvent | undefined,
+	decision: PolicyDecision,
+): Record<string, unknown> {
+	const hookEventName = readHookEventName(event) ?? toCodexHookEventName(event, "PreToolUse");
+
+	if (hookEventName === "PermissionRequest") {
+		return {
+			hookSpecificOutput: {
+				hookEventName,
+				decision: {
+					behavior: "deny",
+					message: decision.reason,
+				},
+			},
+		};
+	}
+
+	if (hookEventName === "PreToolUse") {
+		return {
+			hookSpecificOutput: {
+				hookEventName,
+				permissionDecision: "deny",
+				permissionDecisionReason: decision.reason,
+			},
+		};
+	}
+
+	return {
+		decision: "block",
+		reason: decision.reason,
+		hookSpecificOutput: {
+			hookEventName,
+			additionalContext: decision.reason,
+		},
+	};
+}
+
+function toCodexHookEventName(
+	event: AgentEvent | undefined,
+	fallback: "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop",
+): "SessionStart" | "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "Stop" {
+	const rawHookEventName = readHookEventName(event);
+	if (
+		rawHookEventName === "SessionStart" ||
+		rawHookEventName === "UserPromptSubmit" ||
+		rawHookEventName === "PreToolUse" ||
+		rawHookEventName === "PostToolUse" ||
+		rawHookEventName === "Stop"
+	) {
+		return rawHookEventName;
+	}
+
+	if (!event) {
+		return fallback;
+	}
+
+	switch (event.kind) {
+		case "session.started":
+			return "SessionStart";
+		case "prompt.submitted":
+			return "UserPromptSubmit";
+		case "tool.requested":
+		case "file.mutated":
+			return "PreToolUse";
+		case "tool.completed":
+		case "verification.completed":
+			return "PostToolUse";
+		case "session.stopped":
+			return "Stop";
+	}
+}
+
+function readHookEventName(event: AgentEvent | undefined): string | undefined {
+	if (!event || !isRecord(event.raw)) {
+		return undefined;
+	}
+
+	const rawHookEventName = event.raw.hookEventName;
+	return typeof rawHookEventName === "string" ? rawHookEventName : undefined;
 }
 
 function pickProjectHookResponse(
@@ -1150,13 +1701,17 @@ Hosts:
 
 Common flow:
   init --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--include-optional] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write] [--force]
-  adoption-report --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--runtime-smoke] [--db path] [--store-scope project|user] [--session id] [--json]
-  doctor [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--json]
+  adoption-report --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--policy-cache path] [--runtime-smoke] [--db path] [--store-scope project|user] [--session id] [--json]
+  doctor [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--policy-cache path] [--enforcement] [--json]
+  mcp serve [--cwd path] [--db path] [--store-scope project|user] [--session id]
   skills status [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path]
   route [--skill do] [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--session id] [--result success|retry|abort] [--tool-retries n] [--verify-failures n] [--ambiguity-score n] [--elapsed-minutes n] [--db path] [--store-scope project|user]
 
 Host setup:
   install claude-code [--path .claude/settings.json] [--command "paveda hook claude-code"] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write]
+  install codex [--path .codex/hooks.json] [--command "paveda hook codex"] [--cli-path /path/to/dist/cli.js] [--managed] [--requirements-path requirements.toml] [--managed-dir .codex/hooks] [--allow-unmanaged-hooks] [--write] [--force]
+  install hermes [--config-path .hermes/config.yaml] [--hook-path .hermes/agent-hooks/paveda-policy.sh] [--command "paveda hook hermes"] [--cli-path /path/to/dist/cli.js] [--auto-accept-hooks] [--write] [--force]
+  install pi [--extension-path .pi/extensions/paveda-policy.ts] [--command "paveda hook pi"] [--cli-path /path/to/dist/cli.js] [--write] [--force]
   skills install-bundle --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--include-optional] [--write] [--force]
 
 Skill management:
@@ -1165,6 +1720,9 @@ Skill management:
   skills install <name> [--cwd path] [--target-root path] [--write] [--force]
 
 Runtime and reports:
+  policy bundle [--issuer id] [--generated-at ISO] [--runtime-version version] [--private-key path] [--key-id id] [--write path]
+  policy verify --bundle path [--public-key path --key-id id | --keyring path]
+  policy pull --source path|file-url|https-url [--public-key path --key-id id | --keyring path] [--cache path] [--write]
   runtime-smoke [--cwd path] [--db path] [--store-scope project|user] [--session id] [--json]
   status [--cwd path] [--status active|completed|failed|compacted] [--since 1h|ISO|epoch-ms] [--markdown] [--write path] [--exit-code] [--db path] [--store-scope project|user]
   events --session <id> [--cwd path] [--since 1h|ISO|epoch-ms] [--db path] [--store-scope project|user]
@@ -1173,7 +1731,7 @@ Runtime and reports:
   instincts [list] [--scope project|user] [--status pending|active|promoted|expired] [--include-expired] [--limit n] [--db path] [--store-scope project|user]
   instincts add --scope project|user --pattern text --confidence n [--evidence text] [--examples-json json] [--ttl-expires-at epoch-ms] [--status pending|active|promoted|expired] [--db path] [--store-scope project|user]
   instincts set-status --id n --status pending|active|promoted|expired [--db path] [--store-scope project|user]
-  hook claude-code [--cwd path] [--db path] [--store-scope project|user] < payload.json
+  hook claude-code|codex|hermes|pi [--cwd path] [--db path] [--store-scope project|user] < payload.json
 
 Project utilities:
   check [name] [--cwd path] [--json]

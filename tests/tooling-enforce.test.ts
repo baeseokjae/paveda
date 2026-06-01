@@ -88,7 +88,9 @@ describe("tooling enforce", () => {
 			decision: "deny",
 			ruleId: "T-005",
 		});
-		expect(store.replay("session-1").at(-1)).toMatchObject({
+		expect(
+			store.replay("session-1").find((event) => event.type === "tooling.enforce.evaluated"),
+		).toMatchObject({
 			type: "tooling.enforce.evaluated",
 			payload: {
 				decision: "deny",
@@ -96,6 +98,14 @@ describe("tooling enforce", () => {
 				alternative: "Grep",
 			},
 		});
+		expect(result.policyDecisions).toMatchObject([
+			{
+				action: "deny",
+				ruleId: "T-005",
+				tier: "block",
+				enforced: true,
+			},
+		]);
 
 		store.close();
 	});

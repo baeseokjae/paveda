@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,6 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { formatDoctorReport, runDoctor } from "../src/doctor/index.js";
 import { installHostSkillBundle } from "../src/host-bundles/index.js";
 import { addPavedaClaudeCodeSettings } from "../src/install/claude-code.js";
+import { renderCodexRequirementsToml } from "../src/install/codex.js";
+import {
+	type PolicyBundle,
+	createPolicyBundle,
+	createPolicyBundleCacheEntry,
+	signPolicyBundle,
+	verifySignedPolicyBundleWithKeyring,
+} from "../src/policy/index.js";
 
 const tempDirs: string[] = [];
 
@@ -487,6 +496,259 @@ describe("doctor", () => {
 			readFileSync(join(dir, ".harness", "hooks", "PostToolUse", "Edit", "nested-hook.sh"), "utf8"),
 		).toContain("echo nested hook");
 	});
+
+	it("reports host/action enforcement tiers", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-doctor-enforcement-"));
+		tempDirs.push(dir);
+
+		const result = runDoctor({ cwd: dir, host: "claude-code", enforcement: true });
+
+		expect(check(result, "enforcement-destructive-shell-command")).toMatchObject({
+			status: "pass",
+			details: {
+				host: "claude-code",
+				action: "destructive-shell-command",
+				effectiveTier: "block",
+				syntheticProbe: {
+					executed: true,
+					passed: true,
+					expectedRuleIds: ["D-003"],
+					decisions: expect.arrayContaining([
+						expect.objectContaining({
+							ruleId: "D-003",
+							action: "deny",
+							tier: "block",
+							enforced: true,
+						}),
+					]),
+				},
+				hostCapability: {
+					canBlockBeforeTool: true,
+				},
+			},
+		});
+		expect(check(result, "enforcement-mcp-routed-tool-call")).toMatchObject({
+			status: "warn",
+			details: {
+				effectiveTier: "mediate",
+				syntheticProbe: {
+					executed: false,
+					passed: null,
+				},
+				bypassPaths: expect.arrayContaining([
+					"native tools remain outside MCP mediation unless restricted",
+				]),
+			},
+		});
+	});
+
+	it("reports verified policy cache source in enforcement doctor", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-doctor-policy-source-"));
+		tempDirs.push(dir);
+		const cachePath = writePolicyCacheEntry(dir, ".harness/policy-cache.json");
+
+		const result = runDoctor({
+			cwd: dir,
+			host: "codex",
+			enforcement: true,
+			policyCachePath: ".harness/policy-cache.json",
+		});
+
+		expect(result.policySource).toMatchObject({
+			type: "bundle-cache",
+			cachePath,
+			keyId: "doctor-policy-key",
+			canonicalSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+		});
+		expect(check(result, "policy-source")).toMatchObject({
+			status: "pass",
+			path: cachePath,
+			details: {
+				policySource: expect.objectContaining({
+					type: "bundle-cache",
+					keyId: "doctor-policy-key",
+				}),
+			},
+		});
+		expect(check(result, "enforcement-destructive-shell-command")).toMatchObject({
+			details: {
+				policySource: expect.objectContaining({
+					type: "bundle-cache",
+					keyId: "doctor-policy-key",
+				}),
+			},
+		});
+		expect(formatDoctorReport(result)).toContain(
+			"PASS policy-source: Using verified policy bundle",
+		);
+	});
+
+	it("fails enforcement doctor when configured policy cache is invalid", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-doctor-invalid-policy-source-"));
+		tempDirs.push(dir);
+		const cachePath = join(dir, ".harness", "policy-cache.json");
+		mkdirSync(join(dir, ".harness"), { recursive: true });
+		writeFileSync(cachePath, "{}\n");
+
+		const result = runDoctor({
+			cwd: dir,
+			host: "codex",
+			enforcement: true,
+			policyCachePath: ".harness/policy-cache.json",
+		});
+
+		expect(result.ok).toBe(false);
+		expect(check(result, "policy-source")).toMatchObject({
+			status: "fail",
+			path: cachePath,
+			message: "Policy cache could not be loaded or verified.",
+			details: {
+				policySource: { type: "local" },
+				error: expect.stringContaining("Policy bundle cache"),
+			},
+		});
+	});
+
+	it("fails enforcement doctor when verified policy cache drifts from local rules", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-doctor-policy-drift-"));
+		tempDirs.push(dir);
+		const cachePath = writePolicyCacheEntry(dir, ".harness/policy-cache.json", (bundle) => ({
+			...bundle,
+			rules: bundle.rules.slice(1),
+		}));
+
+		const result = runDoctor({
+			cwd: dir,
+			host: "codex",
+			enforcement: true,
+			policyCachePath: ".harness/policy-cache.json",
+		});
+
+		expect(result.ok).toBe(false);
+		expect(check(result, "policy-source")).toMatchObject({
+			status: "fail",
+			path: cachePath,
+			message: "Policy bundle metadata drifts from the local runtime.",
+			details: {
+				policySource: expect.objectContaining({
+					type: "bundle-cache",
+					keyId: "doctor-policy-key",
+				}),
+				runtimeDrift: expect.objectContaining({
+					ok: false,
+					missingRuleIds: [expect.any(String)],
+				}),
+			},
+		});
+	});
+
+	it("reports Codex managed config status in enforcement doctor", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-doctor-codex-enforcement-"));
+		tempDirs.push(dir);
+		writeFileSync(
+			join(dir, "requirements.toml"),
+			renderCodexRequirementsToml({ command: "paveda hook codex" }),
+		);
+
+		const result = runDoctor({ cwd: dir, host: "codex", enforcement: true });
+
+		expect(check(result, "enforcement-destructive-shell-command")).toMatchObject({
+			status: "pass",
+			details: {
+				effectiveTier: "block",
+				configFiles: [".codex/hooks.json", "requirements.toml"],
+				managedConfigActive: true,
+				syntheticProbe: {
+					executed: true,
+					passed: true,
+				},
+			},
+		});
+	});
+
+	it("reports Hermes and Pi native adapter block tiers in enforcement doctor", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-doctor-native-adapter-enforcement-"));
+		tempDirs.push(dir);
+
+		const hermes = runDoctor({ cwd: dir, host: "hermes", enforcement: true });
+		const pi = runDoctor({ cwd: dir, host: "pi", enforcement: true });
+
+		expect(check(hermes, "enforcement-destructive-shell-command")).toMatchObject({
+			status: "pass",
+			details: {
+				effectiveTier: "block",
+				configFiles: [".hermes/config.yaml", ".hermes/agent-hooks/paveda-policy.sh"],
+				syntheticProbe: {
+					executed: true,
+					passed: true,
+					decisions: expect.arrayContaining([
+						expect.objectContaining({
+							ruleId: "D-003",
+							tier: "block",
+							enforced: true,
+						}),
+					]),
+				},
+			},
+		});
+		expect(check(pi, "enforcement-sensitive-file-mutation")).toMatchObject({
+			status: "pass",
+			details: {
+				effectiveTier: "block",
+				configFiles: [".pi/extensions/paveda-policy.ts", ".pi/AGENTS.md"],
+				syntheticProbe: {
+					executed: true,
+					passed: true,
+				},
+			},
+		});
+	});
+
+	it("runs synthetic workflow probes in enforcement doctor", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-doctor-workflow-probes-"));
+		tempDirs.push(dir);
+
+		const result = runDoctor({ cwd: dir, host: "claude-code", enforcement: true });
+
+		expect(check(result, "enforcement-verification-before-commit")).toMatchObject({
+			details: {
+				syntheticProbe: {
+					executed: true,
+					passed: true,
+					expectedRuleIds: ["W-003"],
+					decisions: expect.arrayContaining([
+						expect.objectContaining({
+							ruleId: "W-003",
+							action: "deny",
+							enforced: true,
+						}),
+					]),
+				},
+			},
+		});
+		expect(check(result, "enforcement-dependency-manifest-mutation")).toMatchObject({
+			details: {
+				syntheticProbe: {
+					executed: true,
+					passed: true,
+					expectedRuleIds: ["B-001"],
+				},
+			},
+		});
+	});
+
+	it("fails enforcement doctor without a host", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-doctor-enforcement-no-host-"));
+		tempDirs.push(dir);
+
+		const result = runDoctor({ cwd: dir, enforcement: true });
+
+		expect(result.ok).toBe(false);
+		expect(check(result, "enforcement-host")).toMatchObject({
+			status: "fail",
+			message: "Enforcement doctor requires --host so capability can be assessed.",
+		});
+	});
 });
 
 function check(result: ReturnType<typeof runDoctor>, name: string) {
@@ -527,4 +789,32 @@ function writeContextModules(root: string): void {
 	writeFileSync(join(contextRoot, "frontend-patterns.md"), "# Frontend patterns\n");
 	writeFileSync(join(contextRoot, "worker-patterns.md"), "# Worker patterns\n");
 	writeFileSync(join(contextRoot, "infra-patterns.md"), "# Infrastructure patterns\n");
+}
+
+function writePolicyCacheEntry(
+	cwd: string,
+	relativePath: string,
+	transformBundle: (bundle: PolicyBundle) => PolicyBundle = (bundle) => bundle,
+): string {
+	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+	const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+	const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+	const bundle = transformBundle(
+		createPolicyBundle({
+			issuer: "doctor-policy-source-test",
+			generatedAt: "2026-06-01T00:00:00.000Z",
+		}),
+	);
+	const signedBundle = signPolicyBundle(bundle, { privateKeyPem, keyId: "doctor-policy-key" });
+	const verification = verifySignedPolicyBundleWithKeyring(signedBundle, {
+		keys: [{ keyId: "doctor-policy-key", publicKeyPem }],
+	});
+	const cacheEntry = createPolicyBundleCacheEntry(signedBundle, verification, {
+		source: "https://policy.example.invalid/doctor-policy.signed.json",
+		cachedAt: "2026-06-01T00:01:00.000Z",
+	});
+	const path = join(cwd, relativePath);
+	mkdirSync(join(path, ".."), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(cacheEntry, null, 2)}\n`);
+	return path;
 }

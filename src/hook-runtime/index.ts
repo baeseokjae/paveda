@@ -18,7 +18,18 @@ import {
 	evaluateTestProcessCleanup,
 } from "../hooks/test-process-cleanup.js";
 import { type ToolingEnforceResult, evaluateToolingEnforce } from "../hooks/tooling-enforce.js";
-import type { EventRecord, EventStore } from "../store/index.js";
+import {
+	type AgentEvent,
+	PolicyEngine,
+	type PolicyEvaluation,
+	type PolicyRuntimeSource,
+	type PolicySourceResults,
+	type WorkflowState,
+	normalizeAgentEvent,
+	projectWorkflowState,
+	resolvePolicyRuntimeSource,
+} from "../policy/index.js";
+import type { EventRecord, EventStore, PolicyDecisionRecord } from "../store/index.js";
 
 export interface HookDefinition {
 	name: string;
@@ -50,12 +61,19 @@ export interface DispatchHookEventResult {
 	toolingEnforce?: ToolingEnforceResult;
 	testProcessCleanup?: TestProcessCleanupResult;
 	projectHooks?: ProjectHooksResult;
+	agentEvent?: AgentEvent;
+	workflowState?: WorkflowState;
+	policySource?: PolicyRuntimeSource;
+	policyEvaluation?: PolicyEvaluation;
+	policyDecisions?: PolicyDecisionRecord[];
 }
 
 interface SessionConfigResolution {
 	config: PavedaConfig;
 	snapshotExists: boolean;
 }
+
+const POLICY_ENGINE = new PolicyEngine();
 
 export const BUILT_IN_HOOKS: readonly HookDefinition[] = [
 	{
@@ -108,6 +126,7 @@ export function dispatchHookEvent(
 ): DispatchHookEventResult {
 	const sessionConfig = resolveSessionConfig(store, input.sessionId, input.config ?? loadConfig());
 	const config = sessionConfig.config;
+	const policySource = resolvePolicySource(config, extractPayloadCwd(input.payload));
 	const hook = resolveHookDefinition(input);
 	const primaryHookEnabled = isHookEnabled(hook, config);
 	const destructiveGuardCompanionHook = resolveCompanionHook(input, "harness.destructive.guard");
@@ -134,7 +153,7 @@ export function dispatchHookEvent(
 					}),
 				]
 			: [];
-		return { dispatched: false, reason: "disabled", hook, events };
+		return { dispatched: false, reason: "disabled", hook, events, policySource };
 	}
 
 	const dispatchedHook = resolveDispatchedHook({
@@ -153,7 +172,15 @@ export function dispatchHookEvent(
 		sessionContext && isRecord(input.payload)
 			? { ...input.payload, sessionContext }
 			: (input.payload ?? {});
-	const events: EventRecord[] = [
+	const events: EventRecord[] = [];
+	const agentEvent = normalizeAgentEvent({
+		sessionId: input.sessionId,
+		lifecycle: input.lifecycle,
+		matcher: input.matcher,
+		payload,
+		ts,
+	});
+	events.push(
 		store.append({
 			sessionId: input.sessionId,
 			ts,
@@ -163,9 +190,10 @@ export function dispatchHookEvent(
 				lifecycle: dispatchedHook.lifecycle,
 				matcher: dispatchedHook.matcher,
 				profile: config.hookProfile,
+				policySource,
 			},
 		}),
-	];
+	);
 	if (shouldSnapshotConfig) {
 		events.push(
 			store.append({
@@ -176,14 +204,13 @@ export function dispatchHookEvent(
 			}),
 		);
 	}
-	events.push(
-		store.append({
-			sessionId: input.sessionId,
-			ts,
-			type: input.lifecycle,
-			payload,
-		}),
-	);
+	const lifecycleEvent = store.append({
+		sessionId: input.sessionId,
+		ts,
+		type: input.lifecycle,
+		payload,
+	});
+	events.push(lifecycleEvent);
 	if (config.hookProfile === "strict") {
 		events.push(
 			store.append({
@@ -277,6 +304,28 @@ export function dispatchHookEvent(
 		);
 	}
 
+	const workflowState = projectWorkflowState(store.replay(input.sessionId));
+	const policyEvaluation = POLICY_ENGINE.evaluate({
+		event: agentEvent,
+		policySource,
+		workflowState,
+		sourceResults: buildPolicySourceResults({
+			input,
+			costGuard,
+			destructiveGuard,
+			blastCheck,
+			toolingEnforce,
+			testProcessCleanup,
+		}),
+	});
+	const policyDecisions = recordPolicyDecisions(store, {
+		sessionId: input.sessionId,
+		ts,
+		eventId: lifecycleEvent.id,
+		evaluation: policyEvaluation,
+		events,
+	});
+
 	const projectHooks = projectHooksEnabled ? runProjectHooks(payload) : undefined;
 	if (projectHooks && projectHooks.executions.length > 0) {
 		for (const execution of projectHooks.executions) {
@@ -302,6 +351,11 @@ export function dispatchHookEvent(
 		toolingEnforce,
 		testProcessCleanup,
 		projectHooks,
+		agentEvent,
+		workflowState,
+		policySource,
+		policyEvaluation,
+		policyDecisions,
 	};
 }
 
@@ -408,6 +462,83 @@ function extractToolPayload(payload: unknown): {
 	};
 }
 
+function buildPolicySourceResults(input: {
+	input: DispatchHookEventInput;
+	costGuard?: CostGuardResult;
+	destructiveGuard?: DestructiveGuardResult;
+	blastCheck?: BlastCheckResult;
+	toolingEnforce?: ToolingEnforceResult;
+	testProcessCleanup?: TestProcessCleanupResult;
+}): PolicySourceResults {
+	return {
+		toolPayload: extractToolPayload(input.input.payload),
+		...(input.costGuard ? { costGuard: input.costGuard } : {}),
+		...(input.destructiveGuard ? { destructiveGuard: input.destructiveGuard } : {}),
+		...(input.blastCheck ? { blastCheck: input.blastCheck } : {}),
+		...(input.toolingEnforce ? { toolingEnforce: input.toolingEnforce } : {}),
+		...(input.testProcessCleanup ? { testProcessCleanup: input.testProcessCleanup } : {}),
+	};
+}
+
+function recordPolicyDecisions(
+	store: EventStore,
+	input: {
+		sessionId: string;
+		ts: number;
+		eventId: number;
+		evaluation: PolicyEvaluation;
+		events: EventRecord[];
+	},
+): PolicyDecisionRecord[] {
+	const records: PolicyDecisionRecord[] = [];
+
+	for (const decision of input.evaluation.decisions) {
+		const record = store.appendPolicyDecision({
+			sessionId: input.sessionId,
+			ts: input.ts,
+			eventId: input.eventId,
+			host: input.evaluation.event.host,
+			ruleId: decision.ruleId,
+			action: decision.action,
+			severity: decision.severity,
+			tier: decision.tier,
+			reason: decision.reason,
+			enforced: decision.enforced,
+			evidence: withPolicySourceEvidence(decision.evidence, input.evaluation.policySource),
+		});
+		records.push(record);
+		input.events.push(
+			store.append({
+				sessionId: input.sessionId,
+				ts: input.ts,
+				type: "policy.decision",
+				payload: record,
+			}),
+		);
+	}
+
+	return records;
+}
+
+function withPolicySourceEvidence(
+	evidence: unknown,
+	policySource: PolicyRuntimeSource,
+): Record<string, unknown> {
+	return {
+		policySource,
+		details: evidence,
+	};
+}
+
+function resolvePolicySource(config: PavedaConfig, cwd?: string): PolicyRuntimeSource {
+	const resolution = resolvePolicyRuntimeSource({ cachePath: config.policyCachePath, cwd });
+	if (!resolution.ok) {
+		throw new Error(`Policy cache is invalid: ${resolution.error}`);
+	}
+
+	return resolution.policySource;
+}
+
 function extractPayloadCwd(payload: unknown): string | undefined {
 	if (!isRecord(payload)) {
 		return undefined;
@@ -495,7 +626,8 @@ function isPavedaConfig(value: unknown): value is PavedaConfig {
 		isPositiveInteger(value.sessionStartMaxChars) &&
 		isPositiveInteger(value.costGuardMaxMinutes) &&
 		isPositiveInteger(value.costGuardAgentWarningThreshold) &&
-		isPositiveInteger(value.costGuardAgentCompactInterval)
+		isPositiveInteger(value.costGuardAgentCompactInterval) &&
+		(value.policyCachePath === undefined || typeof value.policyCachePath === "string")
 	);
 }
 

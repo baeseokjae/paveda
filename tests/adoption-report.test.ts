@@ -1,10 +1,17 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { formatAdoptionReport, runAdoptionReport } from "../src/checks/adoption-report.js";
 import { type HostSkillBundleTarget, installHostSkillBundle } from "../src/host-bundles/index.js";
 import { initializePaveda } from "../src/init/index.js";
+import {
+	createPolicyBundle,
+	createPolicyBundleCacheEntry,
+	signPolicyBundle,
+	verifySignedPolicyBundleWithKeyring,
+} from "../src/policy/index.js";
 
 const tempDirs: string[] = [];
 const ADOPTION_HOSTS: HostSkillBundleTarget[] = ["harness", "claude-code", "codex", "pi", "hermes"];
@@ -185,4 +192,65 @@ describe("adoption report", () => {
 			`targetRoot: ${join(cwd, "vendor", "codex-skills")}`,
 		);
 	});
+
+	it("summarizes the verified policy source for adoption readiness", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "paveda-adoption-report-policy-source-"));
+		tempDirs.push(cwd);
+		initializePaveda({ host: "codex", cwd, write: true });
+		const cachePath = writePolicyCacheEntry(cwd, ".harness/policy-cache.json");
+
+		const result = runAdoptionReport({
+			host: "codex",
+			cwd,
+			policyCachePath: ".harness/policy-cache.json",
+		});
+		const formatted = formatAdoptionReport(result);
+
+		expect(result.ok).toBe(true);
+		expect(result.policySource).toMatchObject({
+			type: "bundle-cache",
+			cachePath,
+			keyId: "adoption-policy-key",
+		});
+		expect(result.checks).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					name: "policy-source",
+					status: "pass",
+					details: expect.objectContaining({
+						policySource: expect.objectContaining({
+							type: "bundle-cache",
+							keyId: "adoption-policy-key",
+						}),
+						runtimeDrift: expect.objectContaining({ ok: true }),
+					}),
+				}),
+			]),
+		);
+		expect(formatted).toContain("PASS policy-source: Using verified policy bundle");
+	});
 });
+
+function writePolicyCacheEntry(cwd: string, relativePath: string): string {
+	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+	const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+	const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+	const signedBundle = signPolicyBundle(
+		createPolicyBundle({
+			issuer: "adoption-policy-source-test",
+			generatedAt: "2026-06-01T00:00:00.000Z",
+		}),
+		{ privateKeyPem, keyId: "adoption-policy-key" },
+	);
+	const verification = verifySignedPolicyBundleWithKeyring(signedBundle, {
+		keys: [{ keyId: "adoption-policy-key", publicKeyPem }],
+	});
+	const cacheEntry = createPolicyBundleCacheEntry(signedBundle, verification, {
+		source: "https://policy.example.invalid/adoption-policy.signed.json",
+		cachedAt: "2026-06-01T00:01:00.000Z",
+	});
+	const path = join(cwd, relativePath);
+	mkdirSync(join(path, ".."), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(cacheEntry, null, 2)}\n`);
+	return path;
+}

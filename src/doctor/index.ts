@@ -12,8 +12,10 @@ import {
 	readClaudeCodeSettings,
 	summarizeExistingClaudeCodeInstall,
 } from "../install/claude-code.js";
+import { type PolicyRuntimeSource, resolvePolicyRuntimeSource } from "../policy/index.js";
 import { loadSkillStatus } from "../skill-loader/index.js";
 import type { LoadSkillsOptions } from "../skill-loader/index.js";
+import { checkEnforcement } from "./enforcement.js";
 
 export type DoctorCheckStatus = "pass" | "warn" | "fail";
 
@@ -22,6 +24,8 @@ export interface DoctorOptions {
 	host?: HostSkillBundleTarget | string;
 	targetRoot?: string;
 	cliCommand?: string;
+	enforcement?: boolean;
+	policyCachePath?: string;
 }
 
 export interface DoctorRecoveryAction {
@@ -43,6 +47,7 @@ export interface DoctorResult {
 	cwd: string;
 	host?: HostSkillBundleTarget;
 	targetRoot?: string;
+	policySource?: PolicyRuntimeSource;
 	checks: DoctorCheck[];
 }
 
@@ -89,6 +94,8 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
 	const host = options.host ? parseHostSkillBundleTarget(options.host) : undefined;
 	const skillRoot = host ? resolveHostSkillRoot(host, cwd, options.targetRoot) : undefined;
 	const cliCommand = options.cliCommand ?? "paveda";
+	const policyCachePath = resolvePolicyCachePathOption(options.policyCachePath);
+	const policySource = options.enforcement ? checkPolicySource(cwd, policyCachePath) : undefined;
 	const checks: DoctorCheck[] = [
 		...checkHostBundle(cwd, host, skillRoot, cliCommand),
 		checkDoSkill(cwd, host, skillRoot, cliCommand),
@@ -96,6 +103,10 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
 		checkClaudeCodeSettings(cwd, host, cliCommand),
 		checkProjectHooks(cwd),
 		checkProjectChecks(cwd),
+		...(policySource ? [policySource.check] : []),
+		...(options.enforcement
+			? checkEnforcement({ cwd, host, policySource: policySource?.policySource })
+			: []),
 	];
 
 	return {
@@ -103,7 +114,93 @@ export function runDoctor(options: DoctorOptions = {}): DoctorResult {
 		cwd,
 		...(host ? { host } : {}),
 		...(options.targetRoot ? { targetRoot: skillRoot } : {}),
+		...(policySource ? { policySource: policySource.policySource } : {}),
 		checks,
+	};
+}
+
+export interface PolicySourceDoctorResolution {
+	check: DoctorCheck;
+	policySource: PolicyRuntimeSource;
+}
+
+export function checkPolicySource(
+	cwd: string,
+	policyCachePath: string | undefined = resolvePolicyCachePathOption(),
+): PolicySourceDoctorResolution {
+	const resolution = resolvePolicyRuntimeSource({ cachePath: policyCachePath, cwd });
+	if (!policyCachePath) {
+		return {
+			policySource: resolution.policySource,
+			check: {
+				name: "policy-source",
+				status: "warn",
+				message: "No verified policy cache is configured; using local runtime policy source.",
+				details: { policySource: resolution.policySource },
+			},
+		};
+	}
+
+	if (!resolution.ok) {
+		return {
+			policySource: resolution.policySource,
+			check: {
+				name: "policy-source",
+				status: "fail",
+				message: "Policy cache could not be loaded or verified.",
+				path: resolution.cachePath,
+				details: { error: resolution.error, policySource: resolution.policySource },
+			},
+		};
+	}
+
+	if (resolution.runtimeDrift && !resolution.runtimeDrift.ok) {
+		return {
+			policySource: resolution.policySource,
+			check: {
+				name: "policy-source",
+				status: "fail",
+				message: "Policy bundle metadata drifts from the local runtime.",
+				path: resolution.policySource.cachePath,
+				details: {
+					policySource: resolution.policySource,
+					runtimeDrift: resolution.runtimeDrift,
+				},
+			},
+		};
+	}
+
+	const runtimeVersionMatches = resolution.runtimeDrift?.runtimeVersionMatches ?? true;
+	if (!runtimeVersionMatches) {
+		return {
+			policySource: resolution.policySource,
+			check: {
+				name: "policy-source",
+				status: "warn",
+				message: `Policy bundle runtime version ${resolution.runtimeDrift?.bundleRuntimeVersion} differs from local runtime ${resolution.runtimeDrift?.localRuntimeVersion}.`,
+				path: resolution.policySource.cachePath,
+				details: {
+					policySource: resolution.policySource,
+					runtimeDrift: resolution.runtimeDrift,
+				},
+			},
+		};
+	}
+
+	return {
+		policySource: resolution.policySource,
+		check: {
+			name: "policy-source",
+			status: "pass",
+			message: `Using verified policy bundle ${shortSha(
+				resolution.policySource.canonicalSha256,
+			)} from ${resolution.policySource.source ?? "cache"}.`,
+			path: resolution.policySource.cachePath,
+			details: {
+				policySource: resolution.policySource,
+				runtimeDrift: resolution.runtimeDrift,
+			},
+		},
 	};
 }
 
@@ -187,6 +284,14 @@ function checkHostBundle(
 		checkHostModelMetadata(cwd, host, skillRoot, cliCommand),
 		...checkCodexSkillMetadata(cwd, host, skillRoot, cliCommand),
 	];
+}
+
+function resolvePolicyCachePathOption(value?: string): string | undefined {
+	return value ?? process.env.PAVEDA_POLICY_CACHE;
+}
+
+function shortSha(value: string | undefined): string {
+	return value ? value.slice(0, 12) : "unknown";
 }
 
 function checkHostRenderedPaths(

@@ -102,6 +102,53 @@ describe("EventStore", () => {
 		store.close();
 	});
 
+	it("records policy decision lineage", () => {
+		const store = openTempStore();
+
+		const decision = store.appendPolicyDecision({
+			sessionId: "policy-session",
+			ts: 100,
+			eventId: 42,
+			host: "claude-code",
+			ruleId: "D-001",
+			action: "deny",
+			severity: "critical",
+			tier: "block",
+			reason: "blocked .env write",
+			enforced: true,
+			evidence: { command: "echo API_KEY=secret >> .env" },
+		});
+
+		expect(decision).toMatchObject({
+			sessionId: "policy-session",
+			eventId: 42,
+			host: "claude-code",
+			ruleId: "D-001",
+			action: "deny",
+			severity: "critical",
+			tier: "block",
+			reason: "blocked .env write",
+			enforced: true,
+			evidence: { command: "echo API_KEY=secret >> .env" },
+		});
+		expect(store.policyLineage("policy-session")).toMatchObject([
+			{
+				ruleId: "D-001",
+				action: "deny",
+				tier: "block",
+			},
+		]);
+		expect(store.listPolicyDecisions({ action: "deny", host: "claude-code" })).toMatchObject([
+			{
+				sessionId: "policy-session",
+				ruleId: "D-001",
+				enforced: true,
+			},
+		]);
+
+		store.close();
+	});
+
 	it("filters sessions and router lineage by timestamp", () => {
 		const store = openTempStore();
 
@@ -426,7 +473,7 @@ describe("EventStore", () => {
 				.prepare("SELECT name FROM schema_migrations WHERE version = ?")
 				.get(CURRENT_SCHEMA_VERSION),
 		).toMatchObject({
-			name: "initial_event_store",
+			name: "policy_decisions",
 		});
 
 		store.close();

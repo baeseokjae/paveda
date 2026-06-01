@@ -4,6 +4,7 @@ export type RouterTier = "frugal" | "standard" | "frontier";
 
 export type LifecycleEvent =
 	| "session.created"
+	| "prompt.submitted"
 	| "tool.execute.before"
 	| "tool.execute.after"
 	| "session.completed"
@@ -21,6 +22,7 @@ export interface PavedaConfig {
 	costGuardMaxMinutes: number;
 	costGuardAgentWarningThreshold: number;
 	costGuardAgentCompactInterval: number;
+	policyCachePath?: string;
 }
 
 export interface DisabledHookSelector {
@@ -67,6 +69,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): PavedaConfig {
 			costGuardDefaults.agentCompactInterval,
 			"PAVEDA_COST_GUARD_AGENT_COMPACT_INTERVAL",
 		),
+		...(env.PAVEDA_POLICY_CACHE ? { policyCachePath: env.PAVEDA_POLICY_CACHE } : {}),
 	};
 }
 

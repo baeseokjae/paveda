@@ -1,9 +1,11 @@
 # Paveda Host Adoption Checklist
 
 Use this checklist when applying Paveda to a project for any supported host.
-Paveda ships a canonical harness bundle. Host directories such as `.claude`,
-`.codex`, `.pi`, and `.hermes` are generated host surfaces; project-owned
-`.harness/hooks` and `.harness/checks` are extension points.
+Paveda's authoritative behavior comes from the packaged policy runtime and
+EventStore-backed decision model. Host directories such as `.claude`, `.codex`,
+`.pi`, and `.hermes` are generated compatibility surfaces that let each host
+discover the same runtime; project-owned `.harness/hooks` and
+`.harness/checks` are extension points.
 
 Commands are safe by default. Inspection and install commands run as dry-runs
 unless `--write` is passed.
@@ -26,7 +28,7 @@ Supported host targets:
 | `pi` | `.pi/skills` | `.pi/context-modules` | `.pi/AGENTS.md` | none |
 | `hermes` | `.hermes/skills` | `.hermes/context-modules` | `.hermes/AGENTS.md` | `.hermes/config.yaml` skill directory registration |
 
-The canonical harness keeps project hook/check extension paths under
+The compatibility bundle keeps project hook/check extension paths under
 `.harness/hooks` and `.harness/checks` even when skills are rendered into a host
 directory.
 
@@ -93,17 +95,68 @@ Use `--skills do,verify` if the host should receive only selected skills:
 node dist/cli.js init --host pi --cwd /path/to/project --skills do,verify --write
 ```
 
-## 5. Verify The Host Surface
+## 5. Attach A Verified Policy Cache
+
+This step is optional for local-only adoption, but it is the control-plane path
+for teams that distribute policy metadata centrally.
+
+Create and sign the bundle from a trusted release environment:
+
+```bash
+node dist/cli.js policy bundle \
+  --issuer team-control-plane \
+  --private-key /secure/ed25519-private.pem \
+  --key-id prod-1 \
+  --write /tmp/paveda-policy.signed.json
+```
+
+On each project, pull the signed bundle from a path, `file://`, `http://`, or
+`https://` source and write the verified cache envelope:
+
+```bash
+node dist/cli.js policy pull \
+  --source /tmp/paveda-policy.signed.json \
+  --keyring /path/to/policy-keyring.json \
+  --cache /path/to/project/.harness/policy-cache.json \
+  --write
+```
+
+The keyring is a JSON object with a `keys[]` array. Each entry contains
+`publicKeyPem` and may include `keyId` for rotation-aware verification.
+
+Then point runtime hooks at that cache:
+
+```bash
+export PAVEDA_POLICY_CACHE=.harness/policy-cache.json
+```
+
+The cache is not a new rule engine. Paveda still executes the packaged
+`PolicyEngine`, while the cache records which signed policy bundle the runtime
+claims as its control-plane source. `doctor --policy-cache` compares the bundle
+rule metadata and host capability matrix against the local runtime and fails if
+they drift. A runtime-version-only mismatch is reported as a warning.
+
+Treat the `policy-source` result as the adoption gate for centrally managed
+policy:
+
+- Invalid cache, digest drift, key mismatch, or signature mismatch is a failure.
+- Rule metadata or host capability drift is a failure.
+- `runtimeVersionMatches: false` with matching rules and host capabilities is a
+  warning.
+- `runtimeDrift.ok: true` is the expected clean state.
+
+## 6. Verify The Host Surface
 
 Run host-scoped checks after writing:
 
 ```bash
 node dist/cli.js doctor --host codex --cwd /path/to/project
+node dist/cli.js doctor --host codex --cwd /path/to/project --policy-cache .harness/policy-cache.json --enforcement --json
 node dist/cli.js skills status --host codex --cwd /path/to/project
 node dist/cli.js route --host codex --cwd /path/to/project --skill do
 node dist/cli.js route --host codex --cwd /path/to/project --skill do --ambiguity-score 0.25
 node dist/cli.js runtime-smoke --cwd /path/to/project --json
-node dist/cli.js adoption-report --host codex --cwd /path/to/project --runtime-smoke --json
+node dist/cli.js adoption-report --host codex --cwd /path/to/project --policy-cache .harness/policy-cache.json --runtime-smoke --json
 ```
 
 Expected:
@@ -121,9 +174,11 @@ Expected:
   `PostToolUse`, and `Stop`.
 - `runtime-smoke` records a synthetic hook session in EventStore and verifies
   replay plus completed session summary materialization.
-- `adoption-report` returns the host surface checks, `/do` route gate, and
-  optional runtime smoke in one result. When doctor checks fail, the report
-  includes each failed doctor check name, message, and path.
+- `doctor --policy-cache` reports a `policy-source` check with verified bundle
+  digest, key id, and `runtimeDrift.ok: true`.
+- `adoption-report` returns the host surface checks, policy source, `/do` route
+  gate, and optional runtime smoke in one result. When doctor checks fail, the
+  report includes each failed doctor check name, message, and path.
 
 `doctor` is read-only. It inspects host bundle files, context modules, `/do`
 router metadata, host model metadata, Codex skill discovery metadata, Claude
@@ -134,7 +189,7 @@ offer a direct repair command.
 project-owned `.harness/hooks`.
 `adoption-report` is read-only unless `--runtime-smoke` is present.
 
-## 6. Install A Host Bundle Directly
+## 7. Install A Host Bundle Directly
 
 Use `skills install-bundle` when you want the host bundle install step without
 the full `init` workflow:
@@ -184,7 +239,7 @@ node dist/cli.js install claude-code \
   --write
 ```
 
-## 7. Customize A Single Builtin Skill
+## 8. Customize A Single Builtin Skill
 
 Use `skills install` when you want a managed copy of one manifest-declared
 Paveda builtin skill under `.harness/skills/` for inspection or local
@@ -205,7 +260,7 @@ node dist/cli.js skills install do --cwd /path/to/project --write
 `--write` copies the full skill directory, including `agents/`, `references/`,
 `personas/`, `scripts/`, `templates/`, and eval fixtures when they exist.
 
-## 8. Fix Existing `/do` Overrides
+## 9. Fix Existing `/do` Overrides
 
 If a project already has a higher-priority `/do` skill, `skills status` may show:
 
@@ -232,7 +287,7 @@ ambiguity-required: 0.2
 If the packaged Paveda harness should be authoritative, remove or relocate the
 project override instead.
 
-## 9. Move Project Hooks
+## 10. Move Project Hooks
 
 Project-owned hooks should live under `.harness/hooks/` when they are not generic
 Paveda behavior. Only move and enable hooks from repositories you trust; Paveda
@@ -269,7 +324,7 @@ node dist/cli.js install claude-code \
   --write
 ```
 
-## 10. Move Project Checks
+## 11. Move Project Checks
 
 Project validation scripts that should run on demand should live under
 `.harness/checks/`.

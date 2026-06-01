@@ -125,13 +125,23 @@ describe("blast check", () => {
 				"Dependency manifest change detected. Sync the project lockfile or dependency metadata.",
 			],
 		});
-		expect(store.replay("session-1").at(-1)).toMatchObject({
+		expect(
+			store.replay("session-1").find((event) => event.type === "blast.check.evaluated"),
+		).toMatchObject({
 			type: "blast.check.evaluated",
 			payload: {
 				additionalContext:
 					"Dependency manifest change detected. Sync the project lockfile or dependency metadata.",
 			},
 		});
+		expect(result.policyDecisions).toMatchObject([
+			{
+				action: "warn",
+				ruleId: "B-001",
+				tier: "verify",
+				enforced: false,
+			},
+		]);
 
 		store.close();
 	});

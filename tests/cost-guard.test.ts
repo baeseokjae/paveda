@@ -62,7 +62,7 @@ describe("cost guard", () => {
 		});
 		const events = store.replay("session-2");
 		expect(events.filter((event) => event.type === "agent.spawned")).toHaveLength(3);
-		expect(events.at(-1)).toMatchObject({
+		expect(events.findLast((event) => event.type === "cost.guard.evaluated")).toMatchObject({
 			type: "cost.guard.evaluated",
 			payload: {
 				agentSpawns: 3,
@@ -70,6 +70,14 @@ describe("cost guard", () => {
 				additionalContext: "Agent spawn count is 3. Consider /compact if context is getting large.",
 			},
 		});
+		expect(store.policyLineage("session-2")).toMatchObject([
+			{
+				action: "require_step",
+				ruleId: "C-001",
+				tier: "verify",
+				enforced: false,
+			},
+		]);
 
 		store.close();
 	});
@@ -88,7 +96,9 @@ describe("cost guard", () => {
 			});
 		}
 
-		expect(store.replay("session-3").at(-1)).toMatchObject({
+		expect(
+			store.replay("session-3").findLast((event) => event.type === "cost.guard.evaluated"),
+		).toMatchObject({
 			type: "cost.guard.evaluated",
 			payload: {
 				agentSpawns: 6,

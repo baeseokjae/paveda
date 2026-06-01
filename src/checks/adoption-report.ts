@@ -1,9 +1,16 @@
-import { type DoctorRecoveryAction, type DoctorResult, runDoctor } from "../doctor/index.js";
+import {
+	type DoctorCheck,
+	type DoctorRecoveryAction,
+	type DoctorResult,
+	checkPolicySource,
+	runDoctor,
+} from "../doctor/index.js";
 import {
 	type HostSkillBundleTarget,
 	parseHostSkillBundleTarget,
 	resolveHostSkillRoot,
 } from "../host-bundles/index.js";
+import type { PolicyRuntimeSource } from "../policy/index.js";
 import { type RouteSkillDecision, routeSkill } from "../router/index.js";
 import {
 	type SkillStatusEntry,
@@ -24,6 +31,7 @@ export interface AdoptionReportOptions {
 	dbPath?: string;
 	sessionId?: string;
 	storeScope?: StoreScope;
+	policyCachePath?: string;
 }
 
 export type AdoptionReportCheckStatus = "pass" | "warn" | "fail" | "skipped";
@@ -58,6 +66,7 @@ export interface AdoptionReportResult {
 	cwd: string;
 	host: HostSkillBundleTarget;
 	targetRoot?: string;
+	policySource: PolicyRuntimeSource;
 	doctor: DoctorResult;
 	doSkill?: SkillStatusEntry;
 	route: RouteSkillDecision;
@@ -76,7 +85,9 @@ export function runAdoptionReport(options: AdoptionReportOptions): AdoptionRepor
 		host,
 		targetRoot: options.targetRoot,
 		cliCommand: options.cliCommand,
+		policyCachePath: options.policyCachePath,
 	});
+	const policySource = checkPolicySource(cwd, options.policyCachePath);
 	const skillOptions = {
 		cwd,
 		projectRoots: [skillRoot],
@@ -103,6 +114,7 @@ export function runAdoptionReport(options: AdoptionReportOptions): AdoptionRepor
 	const runtimeSmokeStatus = buildRuntimeSmokeStatus(runtimeSmoke);
 	const checks = [
 		buildDoctorCheck(doctor),
+		buildPolicySourceCheck(policySource.check),
 		buildDoSkillCheck(doSkill),
 		buildDoRouterCheck(doSkill),
 		buildRouteCheck(route),
@@ -114,6 +126,7 @@ export function runAdoptionReport(options: AdoptionReportOptions): AdoptionRepor
 		cwd,
 		host,
 		...(options.targetRoot ? { targetRoot: skillRoot } : {}),
+		policySource: policySource.policySource,
 		doctor,
 		...(doSkill ? { doSkill } : {}),
 		route,
@@ -178,6 +191,15 @@ function buildDoctorCheck(doctor: DoctorResult): AdoptionReportCheck {
 						failures.map((failure) => failure.name),
 					)}.`,
 		details: { failures },
+	};
+}
+
+function buildPolicySourceCheck(check: DoctorCheck): AdoptionReportCheck {
+	return {
+		name: check.name,
+		status: check.status,
+		message: check.message,
+		details: check.details,
 	};
 }
 
