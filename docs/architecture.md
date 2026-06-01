@@ -5,7 +5,7 @@
 | 영역 | 책임 | 변경 빈도 |
 |---|---|---|
 | 호스트 (Claude Code, Codex, pi, Hermes) | 본체 — paveda 변경 없음 | 외부 |
-| **paveda (이 repo)** | canonical harness bundle, optional portable skills, hook profile, skill loader, SQLite EventStore, PAL Router, /specify ambiguity 게이트 | 중간 |
+| **paveda (이 repo)** | policy runtime, host adapters, optional portable skills, hook profile, skill loader, SQLite EventStore, PAL Router, /specify ambiguity 게이트 | 중간 |
 | 프로젝트 도메인 hook/skill | docs / wiki / deploy 같은 프로젝트별 정책 | 자주 |
 | 외부 도메인 지식 저장소 | 도메인 지식 노드, 결정 기록 | 자주 |
 | SQLite EventStore (paveda 내부) | 운영 lineage, 비용 추적, instinct (옵션) | 매 세션 |
@@ -15,33 +15,67 @@
 ```
 src/
 ├── core/             # 타입, 에러, 설정, 환경변수 로더
+├── policy/           # AgentEvent, PolicyEngine, PolicyDecision, HostCapability, bundle
 ├── hook-runtime/     # profile gate, lifecycle dispatch
 ├── store/            # SQLite EventStore + query CLI
 ├── skill-loader/     # SKILL.md 파서, scope priority
 ├── router/           # PAL Router (Frugal→Standard→Frontier)
-├── host-bundles/     # canonical harness assets → host별 산출물 렌더링
+├── host-bundles/     # compatibility assets → host별 산출물 렌더링
 ├── init/             # host bootstrap + doctor orchestration
 ├── doctor/           # host bundle/readiness 점검
 ├── checks/           # project checks, runtime smoke, adoption report
 └── adapters/
-    └── claude-code/  # Claude Code hook spec 매핑
+    ├── claude-code/  # Claude Code hook spec 매핑
+    ├── codex/        # Codex hook spec 매핑
+    ├── hermes/       # Hermes hook/plugin payload 매핑
+    └── pi/           # Pi extension event 매핑
 
 assets/
-└── harness/          # Paveda canonical core skills, context modules, instructions
+└── harness/          # Paveda compatibility skills, context modules, instructions
 ```
 
 ## 3. 추상 lifecycle 이벤트
 
-| 추상 이벤트 | Claude Code 매핑 | 향후 host hook 매핑 |
-|---|---|---|
-| `session.created` | SessionStart | session_start |
-| `tool.execute.before` | PreToolUse | tool_call_before |
-| `tool.execute.after` | PostToolUse | tool_call_after |
-| `session.completed` | Stop | session_end |
+Hook adapter는 host payload를 먼저 공통 `AgentEvent`로 정규화하고,
+`PolicyEngine`은 기존 guard 결과를 `PolicyDecision`으로 변환한다. Hook runtime은
+legacy guard evaluation event를 보존하면서 `policy_decisions` 테이블과
+`policy.decision` event를 함께 기록한다.
+세션 workflow state는 EventStore replay로 projection한다. 현재 구현은
+`intake → specifying → planning → executing → verifying → handoff` phase와
+plan-only mutation gate, root-cause evidence gate, verification-before-handoff
+gate를 정책 decision으로 기록한다.
+`doctor --enforcement`는 capability tier와 함께 synthetic `PolicyEngine` probe
+결과를 반환해 action별 rule decision이 실제로 생성되는지 확인한다.
 
-v0 hook runtime adapter는 Claude Code lifecycle payload를 지원한다. Host bundle
-installer는 별도 레이어로 `harness`, `claude-code`, `codex`, `pi`, `hermes`
-산출물을 생성한다.
+MCP gateway는 `paveda mcp serve`로 stdio JSON-RPC endpoint를 열고
+`paveda.search/read/patch/shell/git/test` wrapper tool을 제공한다. Native host
+tool이 열려 있으면 MCP는 완전한 security boundary가 아니지만, wrapper tool로
+들어온 action은 동일한 `AgentEvent → PolicyEngine → EventStore → executor`
+경로를 통과한다.
+
+Policy bundle은 같은 runtime rule metadata와 host capability matrix를
+deterministic JSON artifact로 export한다. `canonicalSha256` digest는 control
+plane이 배포 전후 동일성을 확인하는 값이고, Ed25519 signature가 있으면 adapter나
+운영 도구가 bundle drift를 감지할 수 있다. `policy pull`은 path, `file://`,
+`http://`, `https://` source에서 signed bundle을 가져와 trusted keyring으로
+검증하고, 검증된 artifact를 cache envelope으로 저장한다. Hook runtime은
+`PAVEDA_POLICY_CACHE`가 설정된 경우 이 cache envelope을 읽어 `PolicyEvaluation`과
+`policy.decision` evidence에 policy source metadata를 남긴다.
+`doctor --enforcement --policy-cache`와 `adoption-report --policy-cache`는 같은
+cache envelope을 읽어 운영자가 현재 host가 어느 bundle digest/key를 기준으로
+평가 중인지 확인하게 한다. 이 check는 bundle의 rule metadata와 host capability
+matrix를 로컬 runtime과 비교해 drift가 있으면 실패한다.
+
+| 추상 이벤트 | Claude Code | Codex | Hermes | Pi |
+|---|---|---|---|---|
+| `session.created` | SessionStart | SessionStart | on_session_start | session_start |
+| `prompt.submitted` | - | UserPromptSubmit | pre_llm_call / pre_gateway_dispatch | input / before_agent_start |
+| `tool.execute.before` | PreToolUse | PreToolUse / PermissionRequest | pre_tool_call | tool_call |
+| `tool.execute.after` | PostToolUse | PostToolUse | post_tool_call / transform_tool_result | tool_result / tool_execution_end |
+| `session.completed` | Stop | Stop | on_session_end | session_shutdown |
+
+Host bundle installer는 별도 레이어로 `harness`, `claude-code`, `codex`, `pi`,
+`hermes` compatibility 산출물을 생성한다.
 
 ## 4. Hook 프로파일
 
@@ -98,6 +132,21 @@ CREATE TABLE router_decisions (
   result TEXT
 );
 
+CREATE TABLE policy_decisions (
+  id INTEGER PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  rule_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  enforced INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  required_capability TEXT NOT NULL,
+  suggested_remediation TEXT,
+  evidence TEXT NOT NULL
+);
+
 CREATE TABLE instincts (
   id INTEGER PRIMARY KEY,
   scope TEXT NOT NULL,
@@ -123,7 +172,7 @@ Store 위치:
 CLI는 기본적으로 project store를 사용한다. `--store-scope user`를 지정하면
 user store를 사용하고, `--db <path>`는 두 scope보다 우선한다.
 
-Store 파일은 owner-only 권한(0600)으로 보호한다. 현재 schema version은 `1`이며,
+Store 파일은 owner-only 권한(0600)으로 보호한다. 현재 schema version은 `2`이며,
 미래 버전으로 생성된 store는 데이터 손상을 피하기 위해 열지 않는다.
 
 ## 6. PAL Router (v0: `/do` 한정)

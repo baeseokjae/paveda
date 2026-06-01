@@ -4,11 +4,12 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { assertPathDoesNotUseSymlinks } from "../fs-safety.js";
+import type { EnforcementTier, PolicyDecisionAction, PolicySeverity } from "../policy/index.js";
 
 const require = createRequire(import.meta.url);
 const { DatabaseSync: SqliteDatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
 
-export const CURRENT_SCHEMA_VERSION = 1;
+export const CURRENT_SCHEMA_VERSION = 2;
 export const DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const DEFAULT_STORE_OPEN_RETRIES = 8;
 export const DEFAULT_STORE_OPEN_RETRY_DELAY_MS = 100;
@@ -73,6 +74,21 @@ export interface InstinctRecord {
 	status: InstinctStatus;
 }
 
+export interface PolicyDecisionRecord {
+	id: number;
+	sessionId: string;
+	ts: number;
+	eventId: number | null;
+	host: string;
+	ruleId: string;
+	action: PolicyDecisionAction;
+	severity: PolicySeverity;
+	tier: EnforcementTier;
+	reason: string | null;
+	enforced: boolean;
+	evidence: unknown;
+}
+
 export interface AppendRouterDecisionInput {
 	sessionId: string;
 	skill?: RoutedSkill;
@@ -90,6 +106,20 @@ export interface AppendInstinctInput {
 	confidence: number;
 	ttlExpiresAt?: number | null;
 	status?: InstinctStatus;
+}
+
+export interface AppendPolicyDecisionInput {
+	sessionId: string;
+	ts?: number;
+	eventId?: number | null;
+	host: string;
+	ruleId: string;
+	action: PolicyDecisionAction;
+	severity: PolicySeverity;
+	tier: EnforcementTier;
+	reason?: string | null;
+	enforced: boolean;
+	evidence?: unknown;
 }
 
 export interface ReplayOptions {
@@ -116,6 +146,15 @@ export interface ListInstinctsOptions {
 	status?: InstinctStatus;
 	includeExpired?: boolean;
 	now?: number;
+	limit?: number;
+}
+
+export interface ListPolicyDecisionsOptions {
+	sessionId?: string;
+	host?: string;
+	ruleId?: string;
+	action?: PolicyDecisionAction;
+	since?: number;
 	limit?: number;
 }
 
@@ -156,6 +195,21 @@ type InstinctRow = {
 	confidence: number;
 	ttl_expires_at: number | null;
 	status: InstinctStatus;
+};
+
+type PolicyDecisionRow = {
+	id: number;
+	session_id: string;
+	ts: number;
+	event_id: number | null;
+	host: string;
+	rule_id: string;
+	action: PolicyDecisionAction;
+	severity: PolicySeverity;
+	tier: EnforcementTier;
+	reason: string | null;
+	enforced: number;
+	evidence: string;
 };
 
 type SchemaMigrationRow = {
@@ -213,6 +267,29 @@ const STORE_MIGRATIONS: readonly StoreMigration[] = [
 				ttl_expires_at INTEGER,
 				status TEXT NOT NULL DEFAULT 'pending'
 			);
+		`,
+	},
+	{
+		version: 2,
+		name: "policy_decisions",
+		sql: `
+			CREATE TABLE IF NOT EXISTS policy_decisions (
+				id INTEGER PRIMARY KEY,
+				session_id TEXT NOT NULL,
+				ts INTEGER NOT NULL,
+				event_id INTEGER,
+				host TEXT NOT NULL,
+				rule_id TEXT NOT NULL,
+				action TEXT NOT NULL,
+				severity TEXT NOT NULL,
+				tier TEXT NOT NULL,
+				reason TEXT,
+				enforced INTEGER NOT NULL,
+				evidence TEXT NOT NULL
+			);
+			CREATE INDEX IF NOT EXISTS idx_policy_decisions_session ON policy_decisions(session_id, ts);
+			CREATE INDEX IF NOT EXISTS idx_policy_decisions_rule ON policy_decisions(rule_id, ts);
+			CREATE INDEX IF NOT EXISTS idx_policy_decisions_action ON policy_decisions(action, ts);
 		`,
 	},
 ];
@@ -338,6 +415,56 @@ export class EventStore {
 		return instinct;
 	}
 
+	appendPolicyDecision(input: AppendPolicyDecisionInput): PolicyDecisionRecord {
+		const ts = input.ts ?? Date.now();
+		assertNonEmptyString(input.host, "Policy decision host");
+		assertNonEmptyString(input.ruleId, "Policy decision ruleId");
+		assertPolicyDecisionAction(input.action);
+		assertPolicySeverity(input.severity);
+		assertEnforcementTier(input.tier);
+		const evidence = input.evidence ?? {};
+		const evidenceJson = JSON.stringify(evidence);
+
+		this.ensureSession(input.sessionId, ts);
+
+		const result = this.database
+			.prepare(
+				[
+					"INSERT INTO policy_decisions",
+					"(session_id, ts, event_id, host, rule_id, action, severity, tier, reason, enforced, evidence)",
+					"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				].join(" "),
+			)
+			.run(
+				input.sessionId,
+				ts,
+				input.eventId ?? null,
+				input.host,
+				input.ruleId,
+				input.action,
+				input.severity,
+				input.tier,
+				input.reason ?? null,
+				input.enforced ? 1 : 0,
+				evidenceJson,
+			);
+
+		return {
+			id: Number(result.lastInsertRowid),
+			sessionId: input.sessionId,
+			ts,
+			eventId: input.eventId ?? null,
+			host: input.host,
+			ruleId: input.ruleId,
+			action: input.action,
+			severity: input.severity,
+			tier: input.tier,
+			reason: input.reason ?? null,
+			enforced: input.enforced,
+			evidence,
+		};
+	}
+
 	replay(sessionId: string, options: ReplayOptions = {}): EventRecord[] {
 		const rows =
 			options.since === undefined
@@ -416,6 +543,35 @@ export class EventStore {
 						.all(sessionId, options.since) as RouterDecisionRow[]);
 
 		return rows.map(mapRouterDecisionRow);
+	}
+
+	policyLineage(sessionId: string, options: { since?: number } = {}): PolicyDecisionRecord[] {
+		const rows =
+			options.since === undefined
+				? (this.database
+						.prepare(
+							[
+								"SELECT id, session_id, ts, event_id, host, rule_id, action, severity, tier,",
+								"reason, enforced, evidence",
+								"FROM policy_decisions",
+								"WHERE session_id = ?",
+								"ORDER BY ts, id",
+							].join(" "),
+						)
+						.all(sessionId) as PolicyDecisionRow[])
+				: (this.database
+						.prepare(
+							[
+								"SELECT id, session_id, ts, event_id, host, rule_id, action, severity, tier,",
+								"reason, enforced, evidence",
+								"FROM policy_decisions",
+								"WHERE session_id = ? AND ts >= ?",
+								"ORDER BY ts, id",
+							].join(" "),
+						)
+						.all(sessionId, options.since) as PolicyDecisionRow[]);
+
+		return rows.map(mapPolicyDecisionRow);
 	}
 
 	routerHistory(skill: RoutedSkill = ROUTED_SKILL, limit = 20): RouterDecision[] {
@@ -502,6 +658,54 @@ export class EventStore {
 			.all(...values, limit) as InstinctRow[];
 
 		return rows.map(mapInstinctRow);
+	}
+
+	listPolicyDecisions(options: ListPolicyDecisionsOptions = {}): PolicyDecisionRecord[] {
+		const conditions: string[] = [];
+		const values: Array<number | string> = [];
+
+		if (options.sessionId) {
+			conditions.push("session_id = ?");
+			values.push(options.sessionId);
+		}
+
+		if (options.host) {
+			conditions.push("host = ?");
+			values.push(options.host);
+		}
+
+		if (options.ruleId) {
+			conditions.push("rule_id = ?");
+			values.push(options.ruleId);
+		}
+
+		if (options.action) {
+			assertPolicyDecisionAction(options.action);
+			conditions.push("action = ?");
+			values.push(options.action);
+		}
+
+		if (options.since !== undefined) {
+			conditions.push("ts >= ?");
+			values.push(options.since);
+		}
+
+		const where = conditions.length > 0 ? ` WHERE ${conditions.join(" AND ")}` : "";
+		const limit = options.limit ?? 50;
+		const rows = this.database
+			.prepare(
+				[
+					"SELECT id, session_id, ts, event_id, host, rule_id, action, severity, tier,",
+					"reason, enforced, evidence",
+					"FROM policy_decisions",
+					where,
+					"ORDER BY ts DESC, id DESC",
+					"LIMIT ?",
+				].join(" "),
+			)
+			.all(...values, limit) as PolicyDecisionRow[];
+
+		return rows.map(mapPolicyDecisionRow);
 	}
 
 	updateInstinctStatus(id: number, status: InstinctStatus): InstinctRecord | null {
@@ -768,6 +972,23 @@ function mapInstinctRow(row: InstinctRow): InstinctRecord {
 	};
 }
 
+function mapPolicyDecisionRow(row: PolicyDecisionRow): PolicyDecisionRecord {
+	return {
+		id: row.id,
+		sessionId: row.session_id,
+		ts: row.ts,
+		eventId: row.event_id,
+		host: row.host,
+		ruleId: row.rule_id,
+		action: row.action,
+		severity: row.severity,
+		tier: row.tier,
+		reason: row.reason,
+		enforced: row.enforced === 1,
+		evidence: JSON.parse(row.evidence),
+	};
+}
+
 function getCompletionStatus(payload: unknown): SessionStatus {
 	if (
 		typeof payload === "object" &&
@@ -840,6 +1061,43 @@ function assertInstinctConfidence(value: number): void {
 function assertPositiveInteger(value: number, name: string): void {
 	if (!Number.isInteger(value) || value <= 0) {
 		throw new Error(`${name} must be a positive integer`);
+	}
+}
+
+function assertNonEmptyString(value: unknown, name: string): asserts value is string {
+	if (typeof value !== "string" || value.trim().length === 0) {
+		throw new Error(`${name} must not be empty`);
+	}
+}
+
+function assertPolicyDecisionAction(value: unknown): asserts value is PolicyDecisionAction {
+	if (
+		value !== "allow" &&
+		value !== "warn" &&
+		value !== "deny" &&
+		value !== "ask" &&
+		value !== "require_step" &&
+		value !== "record_only"
+	) {
+		throw new Error(`Invalid policy decision action: ${String(value)}`);
+	}
+}
+
+function assertPolicySeverity(value: unknown): asserts value is PolicySeverity {
+	if (
+		value !== "info" &&
+		value !== "low" &&
+		value !== "medium" &&
+		value !== "high" &&
+		value !== "critical"
+	) {
+		throw new Error(`Invalid policy decision severity: ${String(value)}`);
+	}
+}
+
+function assertEnforcementTier(value: unknown): asserts value is EnforcementTier {
+	if (value !== "block" && value !== "gate" && value !== "mediate" && value !== "verify") {
+		throw new Error(`Invalid enforcement tier: ${String(value)}`);
 	}
 }
 

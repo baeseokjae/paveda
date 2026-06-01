@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,12 @@ import {
 	isHookEnabled,
 	resolveHookDefinition,
 } from "../src/hook-runtime/index.js";
+import {
+	createPolicyBundle,
+	createPolicyBundleCacheEntry,
+	signPolicyBundle,
+	verifySignedPolicyBundleWithKeyring,
+} from "../src/policy/index.js";
 import { EventStore } from "../src/store/index.js";
 
 const tempDirs: string[] = [];
@@ -373,6 +380,143 @@ describe("hook runtime", () => {
 
 		store.close();
 	});
+
+	it("uses workflow state to block mutation after a plan-only prompt", () => {
+		const store = openTempStore();
+
+		dispatchHookEvent(store, {
+			sessionId: "session-plan-only",
+			lifecycle: "prompt.submitted",
+			matcher: "session",
+			ts: 100,
+			payload: {
+				host: "codex",
+				prompt: "계획만 세워줘. 아직 파일은 수정하지 마.",
+				raw: {
+					hook_event_name: "UserPromptSubmit",
+					prompt: "계획만 세워줘. 아직 파일은 수정하지 마.",
+				},
+			},
+			config: config(),
+		});
+
+		const result = dispatchHookEvent(store, {
+			sessionId: "session-plan-only",
+			lifecycle: "tool.execute.before",
+			matcher: "Edit",
+			ts: 200,
+			payload: {
+				host: "codex",
+				tool: "Edit",
+				raw: {
+					tool_input: { file_path: "/repo/src/index.ts", new_string: "changed" },
+				},
+			},
+			config: config(),
+		});
+
+		expect(result.workflowState).toMatchObject({
+			mutationRequiresApproval: true,
+		});
+		expect(result.policyDecisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "W-001",
+					action: "deny",
+					enforced: true,
+				}),
+			]),
+		);
+		expect(store.policyLineage("session-plan-only")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "W-001",
+					action: "deny",
+				}),
+			]),
+		);
+
+		store.close();
+	});
+
+	it("uses workflow state to block handoff before verification evidence", () => {
+		const store = openTempStore();
+
+		dispatchHookEvent(store, {
+			sessionId: "session-verify-gate",
+			lifecycle: "tool.execute.before",
+			matcher: "Edit",
+			ts: 100,
+			payload: {
+				host: "claude-code",
+				tool: "Edit",
+				raw: {
+					tool_input: { file_path: "/repo/src/index.ts", new_string: "changed" },
+				},
+			},
+			config: config(),
+		});
+
+		const blockedCommit = dispatchHookEvent(store, {
+			sessionId: "session-verify-gate",
+			lifecycle: "tool.execute.before",
+			matcher: "Bash",
+			ts: 200,
+			payload: {
+				host: "claude-code",
+				tool: "Bash",
+				raw: {
+					tool_input: { command: "git commit -m change" },
+				},
+			},
+			config: config(),
+		});
+
+		expect(blockedCommit.policyDecisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "W-003",
+					action: "deny",
+				}),
+			]),
+		);
+
+		dispatchHookEvent(store, {
+			sessionId: "session-verify-gate",
+			lifecycle: "tool.execute.after",
+			matcher: "Bash",
+			ts: 300,
+			payload: {
+				host: "claude-code",
+				tool: "Bash",
+				raw: {
+					tool_input: { command: "pnpm typecheck" },
+				},
+			},
+			config: config(),
+		});
+
+		const allowedCommit = dispatchHookEvent(store, {
+			sessionId: "session-verify-gate",
+			lifecycle: "tool.execute.before",
+			matcher: "Bash",
+			ts: 400,
+			payload: {
+				host: "claude-code",
+				tool: "Bash",
+				raw: {
+					tool_input: { command: "git commit -m change" },
+				},
+			},
+			config: config(),
+		});
+
+		expect(allowedCommit.policyDecisions?.some((decision) => decision.ruleId === "W-003")).toBe(
+			false,
+		);
+
+		store.close();
+	});
 });
 
 describe("Claude Code adapter", () => {
@@ -449,6 +593,64 @@ describe("Claude Code adapter", () => {
 			hookName: "harness.test.process.cleanup",
 		});
 	});
+
+	it("attaches verified policy cache source metadata to runtime decisions", () => {
+		const store = openTempStore();
+		const cachePath = writePolicyCacheEntry();
+
+		const result = dispatchHookEvent(store, {
+			sessionId: "session-policy-cache",
+			lifecycle: "tool.execute.before",
+			matcher: "Bash",
+			ts: 100,
+			payload: {
+				host: "claude-code",
+				tool: "Bash",
+				raw: { tool_input: { command: "rm -rf /" } },
+			},
+			config: config({ policyCachePath: cachePath }),
+		});
+
+		expect(result.policySource).toMatchObject({
+			type: "bundle-cache",
+			cachePath,
+			source: "https://policy.example.invalid/paveda-policy.signed.json",
+			keyId: "runtime-cache-key",
+			canonicalSha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+		});
+		expect(result.policyEvaluation?.policySource).toEqual(result.policySource);
+		expect(store.replay("session-policy-cache")).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					type: "hook.fired",
+					payload: expect.objectContaining({
+						policySource: expect.objectContaining({
+							type: "bundle-cache",
+							keyId: "runtime-cache-key",
+						}),
+					}),
+				}),
+			]),
+		);
+		expect(result.policyDecisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "D-003",
+					evidence: expect.objectContaining({
+						policySource: expect.objectContaining({
+							type: "bundle-cache",
+							keyId: "runtime-cache-key",
+						}),
+						details: expect.objectContaining({
+							policy: "harness.destructive.guard",
+						}),
+					}),
+				}),
+			]),
+		);
+
+		store.close();
+	});
 });
 
 function config(overrides: Partial<PavedaConfig> = {}): PavedaConfig {
@@ -484,4 +686,29 @@ function makeGitRepo(): string {
 	execFileSync("git", ["commit", "-m", "initial"], { cwd: dir, stdio: "ignore" });
 
 	return dir;
+}
+
+function writePolicyCacheEntry(): string {
+	const dir = mkdtempSync(join(tmpdir(), "paveda-policy-runtime-cache-"));
+	tempDirs.push(dir);
+	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+	const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+	const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+	const signedBundle = signPolicyBundle(
+		createPolicyBundle({
+			issuer: "runtime-cache-test",
+			generatedAt: "2026-06-01T00:00:00.000Z",
+		}),
+		{ privateKeyPem, keyId: "runtime-cache-key" },
+	);
+	const verification = verifySignedPolicyBundleWithKeyring(signedBundle, {
+		keys: [{ keyId: "runtime-cache-key", publicKeyPem }],
+	});
+	const cacheEntry = createPolicyBundleCacheEntry(signedBundle, verification, {
+		source: "https://policy.example.invalid/paveda-policy.signed.json",
+		cachedAt: "2026-06-01T00:01:00.000Z",
+	});
+	const cachePath = join(dir, "policy-cache.json");
+	writeFileSync(cachePath, `${JSON.stringify(cacheEntry, null, 2)}\n`);
+	return cachePath;
 }

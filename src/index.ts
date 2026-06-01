@@ -19,6 +19,14 @@ export * as install from "./install/claude-code.js";
 export * as store from "./store/index.js";
 export * as skillLoader from "./skill-loader/index.js";
 export * as router from "./router/index.js";
+export * as policy from "./policy/index.js";
 export * as claudeCodeAdapter from "./adapters/claude-code/index.js";
+export * as codexAdapter from "./adapters/codex/index.js";
+export * as hermesAdapter from "./adapters/hermes/index.js";
+export * as piAdapter from "./adapters/pi/index.js";
+export * as codexInstall from "./install/codex.js";
+export * as hermesInstall from "./install/hermes.js";
+export * as piInstall from "./install/pi.js";
+export * as mcp from "./mcp/server.js";
 
-export const VERSION = "0.1.0" as const;
+export { VERSION } from "./version.js";

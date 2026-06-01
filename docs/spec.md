@@ -1,28 +1,30 @@
 ---
-title: "Paveda Harness — System Spec"
+title: "Paveda Policy Runtime — System Spec"
 date: 2026-05-15
 status: current
 type: spec
-tags: [harness, host-bundles, eventstore, cli]
+tags: [policy-runtime, host-adapters, eventstore, cli]
 decisions:
   - 별도 오픈소스 프로젝트(repo)로 신규 구축.
   - EventStore는 운영 lineage만 담당하고, 도메인 지식 저장소는 외부 시스템으로 분리.
   - PAL Router는 /do 한정 적용. 다른 skill은 SKILL.md frontmatter `model:` tier 수동 지정 유지.
   - Host bundle target은 harness, claude-code, codex, pi, hermes를 지원한다.
+  - Signed policy bundle은 control-plane 배포 artifact이며 trusted keyring 검증 후 cache한다.
 ---
 
-# Paveda Harness — 설계 스펙
+# Paveda Policy Runtime — 설계 스펙
 
 ## 1. 개요
 
 ### 1.1 목적
 
-Paveda는 agent workflow를 **단독 오픈소스 하네스**로 제공한다. 이 하네스는:
+Paveda는 agent workflow를 **단독 오픈소스 policy runtime**으로 제공한다. 이 런타임은:
 
-- Paveda 패키지 자체가 canonical harness 정의가 된다.
-- 호스트별 agent runtime에 설치되는 운영 인프라(skill loader, hook profile, EventStore, PAL Router 등)와 core harness skills(`/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, `/surgical-edits`)를 함께 제공한다.
+- `PolicyEngine`, 공통 `AgentEvent`/`PolicyDecision`, host capability matrix, EventStore lineage를 권위 있는 정책 판단 경로로 둔다.
+- Runtime rule metadata와 host capability matrix를 signed policy bundle로 export하고, remote/file source에서 pull한 bundle을 trusted keyring으로 검증한다.
+- 호스트별 agent runtime에 설치되는 adapter/hook 설정, skill loader, hook profile, EventStore, PAL Router 등과 core workflow skills(`/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, `/surgical-edits`)를 함께 제공한다.
 - Optional portable skills(`/docs-writer`, `/review`, `/browser-validate`, `/dead-code`)는 기본 설치에서 제외하고 명시적으로 선택한 경우에만 host bundle에 렌더링한다.
-- 소비 프로젝트의 `.claude`, `.codex`, `.pi`, `.hermes` 파일은 Paveda installer가 생성/갱신하는 host별 산출물이다.
+- 소비 프로젝트의 `.claude`, `.codex`, `.pi`, `.hermes` 파일은 Paveda installer가 생성/갱신하는 host별 compatibility export다.
 - 프로젝트 도메인 hook/skill은 core harness 영역 밖이며, project pack 또는 local override로 관리한다.
 
 ### 1.2 3대 설계 기준 (재확인)
@@ -61,19 +63,23 @@ Paveda는 agent workflow를 **단독 오픈소스 하네스**로 제공한다. �
 ```
 src/
 ├── core/             # 타입, 에러, 설정, 환경변수 로더
+├── policy/           # AgentEvent, PolicyEngine, PolicyDecision, HostCapability, bundle
 ├── hook-runtime/     # hook profile, lifecycle dispatch, gate
 ├── store/            # SQLite EventStore + query CLI
 ├── skill-loader/     # SKILL.md 발견·로딩·frontmatter 파싱
 ├── router/           # PAL Router (Frugal/Standard/Frontier 3-tier)
-├── host-bundles/     # canonical harness assets를 host별 산출물로 렌더링
+├── host-bundles/     # compatibility assets를 host별 산출물로 렌더링
 ├── init/             # host bootstrap + doctor orchestration
 ├── doctor/           # host bundle/readiness 점검
 ├── checks/           # project checks, runtime smoke, adoption report
 └── adapters/
-    └── claude-code/  # Claude Code hook spec 매핑
+    ├── claude-code/  # Claude Code hook spec 매핑
+    ├── codex/        # Codex hook spec 매핑
+    ├── hermes/       # Hermes hook/plugin payload 매핑
+    └── pi/           # Pi extension event 매핑
 
 assets/
-└── harness/          # canonical harness bundle
+└── harness/          # compatibility bundle
 ```
 
 각 모듈은 명확한 단일 책임을 갖는다.
@@ -81,13 +87,12 @@ assets/
 ### 3.2 데이터 경로
 
 ```
-호스트(Claude Code) ──hook 이벤트──> hook-runtime
-                                       │
-                       (profile gate)  │  통과한 이벤트만
-                                       ▼
-                                    store (events 테이블에 append)
-                                       │
-                                       ▼
+호스트(Claude Code/Codex/Hermes/Pi)
+  └─ host adapter
+      └─ AgentEvent
+          └─ PolicyEngine
+              ├─ PolicyDecision
+              └─ EventStore(events + policy_decisions)
                               (선택) skill-loader가 trigger 매칭
                                        │
                                        ▼
@@ -101,6 +106,15 @@ assets/
                                        │
                                        ▼
                           (선택) 외부 도메인 지식 저장소에 결정 후보 기록
+```
+
+Control plane distribution path:
+
+```
+policy bundle source(path/file/http)
+  └─ SignedPolicyBundle
+      └─ trusted keyring + canonicalSha256 verification
+          └─ policy cache envelope
 ```
 
 EventStore와 외부 도메인 지식 저장소는 **서로 모른 채로** 동작한다. 연결이
@@ -135,6 +149,7 @@ export PAVEDA_DISABLED_HOOKS="tool.execute.before:Bash:harness.destructive.guard
 export PAVEDA_PROJECT_HOOKS=off               # on일 때만 프로젝트 .harness/hooks 실행
 export PAVEDA_SESSION_START_MAX_CHARS=4000    # 기본 8000
 export PAVEDA_SESSION_START_CONTEXT=off       # 완전 비활성화 옵션
+export PAVEDA_POLICY_CACHE=.harness/policy-cache.json # verified bundle cache metadata 연결
 ```
 
 프로파일별 활성 hook:
@@ -158,16 +173,16 @@ export PAVEDA_SESSION_START_CONTEXT=off       # 완전 비활성화 옵션
 
 호스트별 hook 이름을 추상 이벤트로 매핑:
 
-| 추상 이벤트 | Claude Code 매핑 | 향후 host hook 매핑 |
-|---|---|---|
-| `session.created` | SessionStart | session_start |
-| `tool.execute.before` | PreToolUse | tool_call_before |
-| `tool.execute.after` | PostToolUse | tool_call_after |
-| `session.completed` | Stop | session_end |
+| 추상 이벤트 | Claude Code | Codex | Hermes | Pi |
+|---|---|---|---|---|
+| `session.created` | SessionStart | SessionStart | on_session_start | session_start |
+| `prompt.submitted` | - | UserPromptSubmit | pre_llm_call / pre_gateway_dispatch | input / before_agent_start |
+| `tool.execute.before` | PreToolUse | PreToolUse / PermissionRequest | pre_tool_call | tool_call |
+| `tool.execute.after` | PostToolUse | PostToolUse | post_tool_call / transform_tool_result | tool_result / tool_execution_end |
+| `session.completed` | Stop | Stop | on_session_end | session_shutdown |
 
-v0 hook runtime adapter는 Claude Code lifecycle payload를 지원한다. Host bundle
-installer는 별도 레이어로 `harness`, `claude-code`, `codex`, `pi`, `hermes`
-산출물을 생성한다.
+Host bundle installer는 별도 레이어로 `harness`, `claude-code`, `codex`, `pi`,
+`hermes` compatibility 산출물을 생성한다.
 
 ---
 
@@ -222,7 +237,23 @@ CREATE TABLE router_decisions (
   result TEXT                           -- success | retry | abort
 );
 
--- 4. (선택) Instinct 저장
+-- 4. Policy decision lineage
+CREATE TABLE policy_decisions (
+  id INTEGER PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  rule_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  tier TEXT NOT NULL,
+  enforced INTEGER NOT NULL,
+  reason TEXT NOT NULL,
+  required_capability TEXT NOT NULL,
+  suggested_remediation TEXT,
+  evidence TEXT NOT NULL
+);
+
+-- 5. (선택) Instinct 저장
 CREATE TABLE instincts (
   id INTEGER PRIMARY KEY,
   scope TEXT NOT NULL,                  -- project | user
@@ -234,7 +265,7 @@ CREATE TABLE instincts (
   status TEXT NOT NULL DEFAULT 'pending'-- pending | active | promoted | expired
 );
 
--- 5. Store schema migration ledger
+-- 6. Store schema migration ledger
 CREATE TABLE schema_migrations (
   version INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -254,12 +285,17 @@ paveda status --store-scope user        # ~/.harness/store.db 조회
 paveda runtime-smoke --cwd <project> --json
 paveda runtime-smoke --cwd <project> --store-scope user --json
 paveda adoption-report --host <host> --cwd <project> --runtime-smoke --json
+paveda adoption-report --host <host> --cwd <project> --policy-cache .harness/policy-cache.json --json
 paveda events --cwd <project> --session <id> --since 1h
 paveda router-trace --cwd <project> --session <id> --since 7d # /do의 PAL 결정 lineage
 paveda export-decisions --cwd <project> --skill do --since 7d --markdown --write decisions.md
 paveda instincts add --scope project --pattern "Run focused tests first" --confidence 0.8
 paveda instincts --scope project --status active
 paveda instincts set-status --id 1 --status promoted
+paveda policy bundle --issuer local --write policy.json
+paveda policy verify --bundle policy.signed.json --keyring policy-keyring.json
+paveda policy pull --source https://policy.example.invalid/paveda-policy.signed.json --keyring policy-keyring.json --cache .harness/policy-cache.json --write
+paveda doctor --host <host> --enforcement --policy-cache .harness/policy-cache.json --json
 ```
 
 라이브러리 인터페이스(언어 무관 의사 코드):
@@ -394,6 +430,9 @@ Paveda는 다음 순서로 소비 프로젝트에 도입한다:
 5. Skill Loader, PAL Router (`/do` 한정) 구현.
 6. Claude Code adapter 1차 완성.
 7. Codex/pi/Hermes host skill bundle installer 추가.
+8. Signed policy bundle export/verify/pull/cache 추가.
+9. Hook runtime, doctor, adoption-report에 verified policy source metadata 연결.
+10. Doctor/adoption policy-source check에서 bundle rule/host metadata와 local runtime drift 검증.
 
 ### Phase B — 소비 프로젝트 도입
 
@@ -405,7 +444,7 @@ Paveda는 다음 순서로 소비 프로젝트에 도입한다:
 6. `paveda doctor`로 host bundle, context modules, instruction file, model
    metadata, `/do` router, Codex skill metadata, hook 설정, project hook/check
    상태를 점검.
-7. `paveda adoption-report --host ...`로 host surface와 `/do` route gate를 한 번에 확인.
+7. `paveda adoption-report --host ...`로 host surface, policy source, `/do` route gate를 한 번에 확인.
 8. `paveda runtime-smoke` 또는 `adoption-report --runtime-smoke`로 EventStore write/replay path 확인.
 9. 효과 측정 (cache hit rate, /do 평균 비용, ambiguity 게이트 통과율).
 
@@ -436,7 +475,7 @@ Paveda는 다음 순서로 소비 프로젝트에 도입한다:
 ### D3. 제공 형태
 
 결정: **JS package + CLI**. CLI는 `paveda` 명령을 제공하고, package assets에
-canonical harness bundle을 포함한다. Host별 산출물은 installer가 생성한다.
+host compatibility bundle을 포함한다. Host별 산출물은 installer가 생성한다.
 
 ### D4. repo 위치
 

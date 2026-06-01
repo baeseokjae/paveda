@@ -99,4 +99,14 @@ describe("core config", () => {
 			"Invalid PAVEDA_SESSION_START_CONTEXT",
 		);
 	});
+
+	it("loads an optional verified policy cache path", () => {
+		expect(
+			loadConfig({
+				PAVEDA_POLICY_CACHE: "/tmp/paveda-policy-cache.json",
+			}),
+		).toMatchObject({
+			policyCachePath: "/tmp/paveda-policy-cache.json",
+		});
+	});
 });

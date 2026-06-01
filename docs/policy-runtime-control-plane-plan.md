@@ -1,7 +1,79 @@
 # Paveda Policy Runtime / Control Plane 구현 계획
 
 작성일: 2026-05-29
-상태: proposed implementation plan
+상태: implementation complete, verification passing
+
+구현 메모:
+
+- `src/policy/`에 `AgentEvent`, `PolicyEngine`, `PolicyDecision`, `HostCapability`
+  1차 모델을 추가했다.
+- EventStore schema v2에 `policy_decisions` 테이블과 query API를 추가했다.
+- `hook-runtime`은 기존 guard behavior를 유지하면서 normalized event와 policy
+  decision을 함께 기록한다.
+- `doctor --enforcement --host <host>`는 host/action별 effective tier와 bypass
+  surface를 보고하고, destructive/sensitive-file/dependency-manifest/workflow handoff
+  synthetic probe를 `PolicyEngine`으로 평가한다.
+- Codex adapter와 `install codex` 1차 구현을 추가했다. Installer는
+  `.codex/hooks.json`과 optional `requirements.toml` managed policy block을
+  생성한다.
+- Workflow state projection을 추가했다. EventStore replay에서
+  `intake/specifying/planning/executing/verifying/handoff` phase를 계산하고,
+  plan-only mutation, root-cause evidence, verification-before-handoff gate를
+  `PolicyDecision`으로 기록한다.
+- `paveda mcp serve` 1차 구현을 추가했다. `paveda.search/read/patch/shell/git/test`
+  wrapper tool은 policy evaluation과 EventStore 기록 후 허용된 경우에만 실행된다.
+- Hermes/Pi adapter와 capability matrix를 추가했다. Hermes `pre_tool_call`은
+  `{ "action": "block" }`, Pi `tool_call`은 `{ "block": true }` 응답으로
+  native pre-tool block smoke를 통과한다.
+- `install hermes`와 `install pi`를 추가했다. Hermes installer는
+  `.hermes/config.yaml`과 `.hermes/agent-hooks/paveda-policy.sh`를 만들고, Pi
+  installer는 `.pi/extensions/paveda-policy.ts`를 생성한다.
+- `policy bundle`, `policy verify`, `policy pull`을 추가했다. Runtime rule
+  metadata와 host capability matrix를 deterministic JSON artifact로 export하고,
+  Ed25519 signature, trusted keyring, `canonicalSha256` digest로 drift를 검증한다.
+  `policy pull`은 path/file/http source에서 signed bundle을 가져와 검증된 cache
+  envelope을 기록한다.
+- Hook runtime이 `PAVEDA_POLICY_CACHE`를 읽어 verified cache envelope의 source,
+  digest, key metadata를 `PolicyEvaluation`과 EventStore `policy.decision`
+  evidence에 연결한다.
+- `doctor --enforcement --policy-cache`와 `adoption-report --policy-cache`가 같은
+  policy source metadata를 `policy-source` check와 enforcement probe details에
+  노출한다.
+- `policy-source` check가 verified bundle의 rule metadata와 host capability
+  matrix를 로컬 runtime과 비교해 drift를 fail로 보고한다.
+
+완료 감사:
+
+- 단일 `PolicyEngine`이 normalized `AgentEvent`를 평가한다:
+  `src/policy/engine.ts`, `src/policy/normalize.ts`, `tests/policy.test.ts`.
+- 기존 guard behavior는 policy decision model 아래에서 유지된다:
+  `tests/hook-runtime.test.ts`, `tests/destructive-guard.test.ts`,
+  `tests/blast-check.test.ts`, `tests/tooling-enforce.test.ts`,
+  `tests/cost-guard.test.ts`, `tests/test-process-cleanup.test.ts`.
+- EventStore가 raw event와 policy decision lineage를 함께 기록한다:
+  `src/store/index.ts`, `tests/store.test.ts`, `tests/hook-runtime.test.ts`.
+- `doctor --enforcement`가 host/action별 tier, bypass, remediation, managed
+  config, synthetic probe 결과를 출력한다: `src/doctor/enforcement.ts`,
+  `tests/doctor.test.ts`.
+- Claude Code, Codex, Hermes, Pi adapter와 installer smoke가 존재하고, packaged
+  CLI smoke가 host-native deny/block 응답을 검증한다:
+  `tests/*adapter.test.ts`, `tests/install-*.test.ts`,
+  `scripts/package-check.mjs`.
+- Codex managed config는 `requirements.toml` policy block까지 생성/검증한다:
+  `src/install/codex.ts`, `tests/install-codex.test.ts`,
+  `tests/doctor.test.ts`.
+- MCP gateway가 `paveda.shell`, `paveda.patch`, `paveda.git`, `paveda.test`
+  action을 policy와 EventStore 경유로 중재한다:
+  `src/mcp/executor.ts`, `tests/mcp.test.ts`.
+- Signed policy bundle export/verify/pull/cache와 runtime drift detection이
+  doctor/adoption/package smoke에 포함된다:
+  `src/policy/bundle.ts`, `tests/policy-bundle.test.ts`,
+  `tests/doctor.test.ts`, `tests/adoption-report.test.ts`,
+  `scripts/package-check.mjs`.
+- 문서와 public README는 Paveda를 rule distribution system이 아니라 policy
+  runtime/control-plane으로 설명한다:
+  `README.md`, `docs/spec.md`, `docs/architecture.md`,
+  `docs/adoption.md`, `docs/release.md`.
 
 ## 1. 목표
 
@@ -16,16 +88,16 @@ Paveda의 목표는 Claude Code, Codex, Hermes, Pi 등 어떤 agent 플랫폼을
 3. host별 lifecycle을 공통 모델로 변환하는 adapter
 4. 실제 이벤트와 policy decision을 남기는 EventStore
 
-## 2. 현재 구조의 문제
+## 2. 초기 구조의 문제
 
-현재 코드베이스는 아직 "portable harness bundle" 중심이다.
+이 계획을 시작할 당시 코드베이스는 "portable harness bundle" 중심이었다.
 
 - `docs/spec.md`는 Paveda를 canonical harness로 설명하고, host별 산출물을 렌더링한다고 말한다.
 - `docs/architecture.md`는 `host-bundles`를 canonical asset을 host directory로 렌더링하는 핵심 모듈로 둔다.
 - `src/hook-runtime/index.ts`에는 이미 유용한 guard 로직이 있지만, 정책 판단이 lifecycle dispatch 안에 섞여 있다.
-- `src/install/claude-code.ts`는 Claude Code hook 설치만 다루며, Codex/Hermes/Pi adapter는 아직 없다.
+- `src/install/claude-code.ts`는 Claude Code hook 설치만 다루며, Codex/Hermes/Pi adapter는 아직 없었다.
 
-이 구조는 좋은 출발점이지만, 사용자가 원하는 목표와는 중심이 다르다. 앞으로는 host bundle을 "compatibility export"로 낮추고, policy runtime을 중심으로 재정의해야 한다.
+이 구조는 좋은 출발점이지만, 사용자가 원하는 목표와는 중심이 다르다. host bundle은 "compatibility export"로 낮추고, policy runtime을 중심으로 재정의한다.
 
 ## 3. 보강 리서치 결과
 
@@ -333,8 +405,8 @@ probe 대상:
 
 - Claude Code adapter를 공통 모델 중심으로 리팩터링
 - Codex adapter에 personal config + managed config 지원 추가
-- Hermes adapter 조사 및 구현
-- Pi adapter 조사 및 구현
+- Hermes adapter 조사 및 구현, native hook installer 추가
+- Pi adapter 조사 및 구현, project-local extension installer 추가
 
 ### Phase 5. MCP Gateway
 

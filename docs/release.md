@@ -58,7 +58,11 @@ verifies project hook/check execution guards for path
 traversal and symlinked executables. Host asset smoke scans the rendered skill,
 context, and instruction text for stale host paths, unadapted model tiers, and
 unsupported model frontmatter. Custom target smoke also runs installed
-`/specify` and `/do` helper scripts against packaged fixtures.
+`/specify` and `/do` helper scripts against packaged fixtures. Policy
+control-plane smoke creates a signed policy bundle with an ephemeral Ed25519
+key, verifies it through a keyring, writes a policy cache envelope, and confirms
+`doctor --enforcement --policy-cache`, `adoption-report --policy-cache`, and
+`hook claude-code` all expose the verified bundle source without runtime drift.
 
 ## Tarball Smoke Test
 
@@ -77,7 +81,22 @@ pnpm exec paveda doctor --host codex --cwd /private/tmp/paveda-pack-smoke-projec
 pnpm exec paveda route --host codex --cwd /private/tmp/paveda-pack-smoke-project --skill do --ambiguity-score 0.25
 pnpm exec paveda runtime-smoke --cwd /private/tmp/paveda-pack-smoke-project --json
 pnpm exec paveda adoption-report --host codex --cwd /private/tmp/paveda-pack-smoke-project --runtime-smoke --json
+pnpm exec paveda policy bundle \
+  --issuer package-smoke \
+  --generated-at 2026-06-01T00:00:00.000Z \
+  --private-key /path/to/ed25519-private.pem \
+  --key-id package-smoke-key \
+  --write /path/to/paveda-policy.signed.json
+pnpm exec paveda policy pull --source /path/to/paveda-policy.signed.json --keyring /path/to/policy-keyring.json --cache /private/tmp/paveda-policy-cache.json --write
+pnpm exec paveda doctor --host codex --cwd /private/tmp/paveda-pack-smoke-project --policy-cache /private/tmp/paveda-policy-cache.json --enforcement --json
+pnpm exec paveda adoption-report --host codex --cwd /private/tmp/paveda-pack-smoke-project --policy-cache /private/tmp/paveda-policy-cache.json --json
 ```
+
+The manual policy commands assume a signing key and a trusted keyring are
+available. The automated package check creates ephemeral Ed25519 keys, writes a
+temporary keyring, signs the bundle, then exercises the same `policy pull`,
+`doctor --policy-cache`, `adoption-report --policy-cache`, and hook evidence
+flow.
 
 The automated package check runs a broader matrix than the manual Codex example:
 `harness`, `claude-code`, `codex`, `pi`, and `hermes` are all initialized,
@@ -88,6 +107,11 @@ checks hook settings installation. Each host also runs `adoption-report
 `Stop` hook payloads into a temporary EventStore and verifies `events` replay
 plus `status` materialization. It also verifies deterministic worktree port
 output and executable project check reporting.
+The hook runtime smoke also checks Codex, Hermes, and Pi deny responses use the
+host-native block shape expected by each adapter.
+The automated package check also signs a policy bundle, verifies keyring
+selection, writes a cache envelope, checks `runtimeDrift.ok`, and verifies that
+hook decision evidence includes the same bundle digest/key metadata.
 
 Expected results:
 
@@ -108,6 +132,13 @@ Expected results:
   updates their lifecycle status.
 - `adoption-report` summarizes host readiness, `/do` route gate behavior, and
   runtime smoke in one result.
+- `policy bundle` emits deterministic rule/capability metadata with a canonical
+  SHA-256 digest; signed bundles verify through a trusted keyring.
+- `policy pull` writes a verified cache envelope that `doctor`, `adoption-report`,
+  and runtime hook dispatch can all read.
+- `doctor --enforcement --policy-cache` and `adoption-report --policy-cache`
+  report `policy-source` with the verified digest/key metadata and
+  `runtimeDrift.ok: true`.
 - `skills install do` dry-run targets
   `.harness/skills/do/SKILL.md`; with `--write` it copies the full skill
   directory, not only `SKILL.md`.
@@ -137,6 +168,8 @@ Expected results:
 - `skills status --host <host>` selects installed host skills from project scope.
 - `hook claude-code` records lifecycle events and a completed session summary in
   EventStore.
+- `hook codex`, `hook hermes`, and `hook pi` return host-native deny/block
+  responses for synthetic destructive or sensitive-file actions.
 - `port` prints deterministic shell exports and matching JSON output.
 - `check` executes `.harness/checks` scripts, reports stdout/stderr in JSON, and
   returns a failing exit code when a check fails.
