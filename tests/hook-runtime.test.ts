@@ -439,7 +439,7 @@ describe("hook runtime", () => {
 		store.close();
 	});
 
-	it("uses workflow state to block handoff before verification evidence", () => {
+	it("uses workflow state to block handoff until verification passes", () => {
 		const store = openTempStore();
 
 		dispatchHookEvent(store, {
@@ -491,16 +491,17 @@ describe("hook runtime", () => {
 				tool: "Bash",
 				raw: {
 					tool_input: { command: "pnpm typecheck" },
+					tool_response: { exit_code: 1 },
 				},
 			},
 			config: config(),
 		});
 
-		const allowedCommit = dispatchHookEvent(store, {
+		const stillBlockedCommit = dispatchHookEvent(store, {
 			sessionId: "session-verify-gate",
 			lifecycle: "tool.execute.before",
 			matcher: "Bash",
-			ts: 400,
+			ts: 350,
 			payload: {
 				host: "claude-code",
 				tool: "Bash",
@@ -511,6 +512,54 @@ describe("hook runtime", () => {
 			config: config(),
 		});
 
+		expect(stillBlockedCommit.workflowState).toMatchObject({
+			lastVerificationStatus: "failed",
+			pendingVerification: true,
+		});
+		expect(stillBlockedCommit.policyDecisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "W-003",
+					action: "deny",
+				}),
+			]),
+		);
+
+		dispatchHookEvent(store, {
+			sessionId: "session-verify-gate",
+			lifecycle: "tool.execute.after",
+			matcher: "Bash",
+			ts: 400,
+			payload: {
+				host: "claude-code",
+				tool: "Bash",
+				raw: {
+					tool_input: { command: "pnpm typecheck" },
+					tool_response: { exit_code: 0 },
+				},
+			},
+			config: config(),
+		});
+
+		const allowedCommit = dispatchHookEvent(store, {
+			sessionId: "session-verify-gate",
+			lifecycle: "tool.execute.before",
+			matcher: "Bash",
+			ts: 500,
+			payload: {
+				host: "claude-code",
+				tool: "Bash",
+				raw: {
+					tool_input: { command: "git commit -m change" },
+				},
+			},
+			config: config(),
+		});
+
+		expect(allowedCommit.workflowState).toMatchObject({
+			lastVerificationStatus: "passed",
+			pendingVerification: false,
+		});
 		expect(allowedCommit.policyDecisions?.some((decision) => decision.ruleId === "W-003")).toBe(
 			false,
 		);
@@ -543,6 +592,65 @@ describe("Claude Code adapter", () => {
 		});
 	});
 
+	it("maps Claude Code UserPromptSubmit payloads to prompt events", () => {
+		expect(
+			fromClaudeCodeHookPayload({
+				hook_event_name: "UserPromptSubmit",
+				session_id: "session-prompt",
+				cwd: "/repo",
+				prompt: "계획만 세워줘. 아직 수정하지 마.",
+			}),
+		).toMatchObject({
+			sessionId: "session-prompt",
+			lifecycle: "prompt.submitted",
+			matcher: "session",
+			hookName: "paveda.lifecycle.prompt.submit",
+			payload: {
+				host: "claude-code",
+				hookEventName: "UserPromptSubmit",
+				cwd: "/repo",
+				prompt: "계획만 세워줘. 아직 수정하지 마.",
+			},
+		});
+	});
+
+	it("uses Claude Code prompt events to block plan-only mutations", () => {
+		const store = openTempStore();
+
+		dispatchHookEvent(store, {
+			...fromClaudeCodeHookPayload({
+				hook_event_name: "UserPromptSubmit",
+				session_id: "session-claude-plan-only",
+				prompt: "계획만 세워줘. 아직 파일은 수정하지 마.",
+			}),
+			ts: 100,
+			config: config(),
+		});
+
+		const result = dispatchHookEvent(store, {
+			...fromClaudeCodeHookPayload({
+				hook_event_name: "PreToolUse",
+				session_id: "session-claude-plan-only",
+				tool_name: "Edit",
+				tool_input: { file_path: "/repo/src/index.ts", new_string: "changed" },
+			}),
+			ts: 200,
+			config: config(),
+		});
+
+		expect(result.policyDecisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "W-001",
+					action: "deny",
+					enforced: true,
+				}),
+			]),
+		);
+
+		store.close();
+	});
+
 	it("maps Claude Code apply_patch payloads to file mutation checks", () => {
 		expect(
 			fromClaudeCodeHookPayload({
@@ -556,6 +664,29 @@ describe("Claude Code adapter", () => {
 			lifecycle: "tool.execute.before",
 			matcher: "apply_patch",
 			hookName: "harness.blast.check",
+		});
+	});
+
+	it("maps Claude Code PostToolUseFailure payloads to failed tool results", () => {
+		expect(
+			fromClaudeCodeHookPayload({
+				hook_event_name: "PostToolUseFailure",
+				session_id: "session-tool-failure",
+				tool_name: "Bash",
+				tool_input: { command: "pnpm test" },
+				reason: "exit code 1",
+			}),
+		).toMatchObject({
+			sessionId: "session-tool-failure",
+			lifecycle: "tool.execute.after",
+			matcher: "Bash",
+			hookName: "harness.test.process.cleanup",
+			payload: {
+				host: "claude-code",
+				hookEventName: "PostToolUseFailure",
+				tool: "Bash",
+				error: "exit code 1",
+			},
 		});
 	});
 

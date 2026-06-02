@@ -16,6 +16,8 @@ export interface WorkflowState {
 	rootCauseEvidenceRequired: boolean;
 	rootCauseEvidenceObserved: boolean;
 	pendingVerification: boolean;
+	lastVerificationStatus: "passed" | "failed" | "unknown" | null;
+	lastVerificationCommand: string | null;
 	lastPrompt: string | null;
 	evidence: string[];
 	updatedAt: number | null;
@@ -29,6 +31,8 @@ export function initialWorkflowState(): WorkflowState {
 		rootCauseEvidenceRequired: false,
 		rootCauseEvidenceObserved: false,
 		pendingVerification: false,
+		lastVerificationStatus: null,
+		lastVerificationCommand: null,
 		lastPrompt: null,
 		evidence: [],
 		updatedAt: null,
@@ -74,9 +78,12 @@ function applyEventToWorkflowState(state: WorkflowState, event: EventRecord): vo
 	if (event.type === "tool.execute.after") {
 		const tool = extractTool(event.payload);
 		if (isVerificationTool(tool)) {
+			const verificationStatus = readVerificationStatus(tool);
 			state.phase = "verifying";
-			state.pendingVerification = false;
-			state.evidence.push(`verification:${tool.name}`);
+			state.lastVerificationStatus = verificationStatus;
+			state.lastVerificationCommand = readToolCommand(tool) ?? null;
+			state.pendingVerification = verificationStatus !== "passed";
+			state.evidence.push(`verification:${tool.name}:${verificationStatus}`);
 		}
 		if (isRootCauseEvidenceTool(tool)) {
 			state.rootCauseEvidenceObserved = true;
@@ -137,7 +144,12 @@ function extractPrompt(payload: unknown): string | null {
 	return typeof raw?.prompt === "string" ? raw.prompt : null;
 }
 
-function extractTool(payload: unknown): { name?: string; input?: unknown } {
+function extractTool(payload: unknown): {
+	name?: string;
+	input?: unknown;
+	response?: unknown;
+	error?: unknown;
+} {
 	if (!isRecord(payload)) {
 		return {};
 	}
@@ -146,6 +158,8 @@ function extractTool(payload: unknown): { name?: string; input?: unknown } {
 	return {
 		name: typeof payload.tool === "string" ? payload.tool : readString(raw, "tool_name"),
 		input: raw?.tool_input,
+		response: raw?.tool_response ?? payload.toolResponse,
+		error: payload.error ?? raw?.error,
 	};
 }
 
@@ -180,13 +194,54 @@ function isVerificationTool(tool: { name?: string; input?: unknown }): boolean {
 		return false;
 	}
 
-	const command = readString(isRecord(tool.input) ? tool.input : undefined, "command");
+	const command = readToolCommand(tool);
 	return Boolean(
 		command &&
 			/\b(?:pnpm|npm|npx|yarn)\s+(?:test|vitest|lint|typecheck|build)\b|\b(?:vitest|pytest|cargo\s+test|go\s+test|mvn\s+test|gradle\s+test|tsc|biome\s+check)\b/.test(
 				command,
 			),
 	);
+}
+
+function readVerificationStatus(tool: {
+	response?: unknown;
+	error?: unknown;
+}): "passed" | "failed" | "unknown" {
+	if (tool.error !== undefined) {
+		return "failed";
+	}
+
+	const responseStatus = readStatusValue(tool.response);
+	if (responseStatus !== undefined) {
+		return responseStatus;
+	}
+
+	return "unknown";
+}
+
+function readStatusValue(value: unknown): "passed" | "failed" | "unknown" | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+
+	for (const key of ["exit_code", "exitCode", "status", "code"]) {
+		const candidate = value[key];
+		if (typeof candidate === "number") {
+			return candidate === 0 ? "passed" : "failed";
+		}
+		if (typeof candidate === "string") {
+			const normalized = candidate.toLowerCase();
+			if (normalized === "passed" || normalized === "success" || normalized === "ok") {
+				return "passed";
+			}
+			if (normalized === "failed" || normalized === "failure" || normalized === "error") {
+				return "failed";
+			}
+		}
+	}
+
+	const nested = value.result ?? value.output ?? value.toolResponse;
+	return nested === value ? undefined : readStatusValue(nested);
 }
 
 function isRootCauseEvidenceTool(tool: { name?: string; input?: unknown }): boolean {
@@ -230,6 +285,10 @@ function isRootCauseEvidencePrompt(prompt: string): boolean {
 function readString(value: Record<string, unknown> | undefined, key: string): string | undefined {
 	const candidate = value?.[key];
 	return typeof candidate === "string" ? candidate : undefined;
+}
+
+function readToolCommand(tool: { input?: unknown }): string | undefined {
+	return readString(isRecord(tool.input) ? tool.input : undefined, "command");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

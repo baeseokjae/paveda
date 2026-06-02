@@ -23,13 +23,18 @@ describe("Claude Code installer", () => {
 		expect(addPavedaHooks({})).toEqual({
 			hooks: {
 				SessionStart: [{ hooks: [{ type: "command", command: "paveda hook claude-code" }] }],
+				UserPromptSubmit: [{ hooks: [{ type: "command", command: "paveda hook claude-code" }] }],
 				PreToolUse: [
 					{ matcher: "*", hooks: [{ type: "command", command: "paveda hook claude-code" }] },
 				],
 				PostToolUse: [
 					{ matcher: "*", hooks: [{ type: "command", command: "paveda hook claude-code" }] },
 				],
+				PostToolUseFailure: [
+					{ matcher: "*", hooks: [{ type: "command", command: "paveda hook claude-code" }] },
+				],
 				Stop: [{ hooks: [{ type: "command", command: "paveda hook claude-code" }] }],
+				SessionEnd: [{ hooks: [{ type: "command", command: "paveda hook claude-code" }] }],
 			},
 		});
 	});
@@ -110,9 +115,12 @@ describe("Claude Code installer", () => {
 		});
 		expect(result.summary.hooks).toEqual([
 			{ event: "SessionStart", installed: true, commandCount: 1 },
+			{ event: "UserPromptSubmit", installed: true, commandCount: 1 },
 			{ event: "PreToolUse", matcher: "*", installed: true, commandCount: 1 },
 			{ event: "PostToolUse", matcher: "*", installed: true, commandCount: 1 },
+			{ event: "PostToolUseFailure", matcher: "*", installed: true, commandCount: 1 },
 			{ event: "Stop", installed: true, commandCount: 1 },
+			{ event: "SessionEnd", installed: true, commandCount: 1 },
 		]);
 		expect(written).toEqual(result.settings);
 	});
@@ -214,6 +222,9 @@ describe("Claude Code installer", () => {
 		expect(settings.hooks?.SessionStart).toEqual([
 			{ hooks: [{ type: "command", command: "node /opt/paveda/dist/cli.js hook claude-code" }] },
 		]);
+		expect(settings.hooks?.UserPromptSubmit).toEqual([
+			{ hooks: [{ type: "command", command: "node /opt/paveda/dist/cli.js hook claude-code" }] },
+		]);
 	});
 
 	it("quotes cli paths with shell-sensitive characters", () => {
@@ -253,9 +264,12 @@ describe("Claude Code installer", () => {
 			command: "node /opt/paveda/dist/cli.js hook claude-code",
 			hooks: [
 				{ event: "SessionStart", installed: true, commandCount: 1 },
+				{ event: "UserPromptSubmit", installed: true, commandCount: 1 },
 				{ event: "PreToolUse", matcher: "*", installed: true, commandCount: 1 },
 				{ event: "PostToolUse", matcher: "*", installed: true, commandCount: 1 },
+				{ event: "PostToolUseFailure", matcher: "*", installed: true, commandCount: 1 },
 				{ event: "Stop", installed: true, commandCount: 1 },
+				{ event: "SessionEnd", installed: true, commandCount: 1 },
 			],
 			env: {
 				cliPath: "/opt/paveda/dist/cli.js",

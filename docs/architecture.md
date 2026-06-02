@@ -51,9 +51,11 @@ MCP gateway는 `paveda mcp serve`로 stdio JSON-RPC endpoint를 열고
 `paveda.search/read/patch/shell/git/test` wrapper tool을 제공한다. Native host
 tool이 열려 있으면 MCP는 완전한 security boundary가 아니지만, wrapper tool로
 들어온 action은 동일한 `AgentEvent → PolicyEngine → EventStore → executor`
-경로를 통과한다.
+경로를 통과한다. `--policy-cache`를 전달하면 hook runtime과 같은 verified
+bundle source metadata가 `PolicyEvaluation`과 `policy.decision` evidence에 남고,
+cache 검증 실패 시 tool 실행 전에 실패한다.
 
-Policy bundle은 같은 runtime rule metadata와 host capability matrix를
+Policy bundle은 같은 runtime rule version/fingerprint metadata와 host capability matrix를
 deterministic JSON artifact로 export한다. `canonicalSha256` digest는 control
 plane이 배포 전후 동일성을 확인하는 값이고, Ed25519 signature가 있으면 adapter나
 운영 도구가 bundle drift를 감지할 수 있다. `policy pull`은 path, `file://`,
@@ -69,10 +71,10 @@ matrix를 로컬 runtime과 비교해 drift가 있으면 실패한다.
 | 추상 이벤트 | Claude Code | Codex | Hermes | Pi |
 |---|---|---|---|---|
 | `session.created` | SessionStart | SessionStart | on_session_start | session_start |
-| `prompt.submitted` | - | UserPromptSubmit | pre_llm_call / pre_gateway_dispatch | input / before_agent_start |
+| `prompt.submitted` | UserPromptSubmit | UserPromptSubmit | pre_llm_call / pre_gateway_dispatch | input / before_agent_start |
 | `tool.execute.before` | PreToolUse | PreToolUse / PermissionRequest | pre_tool_call | tool_call |
-| `tool.execute.after` | PostToolUse | PostToolUse | post_tool_call / transform_tool_result | tool_result / tool_execution_end |
-| `session.completed` | Stop | Stop | on_session_end | session_shutdown |
+| `tool.execute.after` | PostToolUse / PostToolUseFailure | PostToolUse | post_tool_call / transform_tool_result | tool_result / tool_execution_end |
+| `session.completed` | Stop / SessionEnd | Stop | on_session_end | session_shutdown |
 
 Host bundle installer는 별도 레이어로 `harness`, `claude-code`, `codex`, `pi`,
 `hermes` compatibility 산출물을 생성한다.

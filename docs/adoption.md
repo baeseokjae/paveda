@@ -133,8 +133,9 @@ export PAVEDA_POLICY_CACHE=.harness/policy-cache.json
 The cache is not a new rule engine. Paveda still executes the packaged
 `PolicyEngine`, while the cache records which signed policy bundle the runtime
 claims as its control-plane source. `doctor --policy-cache` compares the bundle
-rule metadata and host capability matrix against the local runtime and fails if
-they drift. A runtime-version-only mismatch is reported as a warning.
+rule version/fingerprint metadata and host capability matrix against the local
+runtime and fails if they drift. A runtime-version-only mismatch is reported as
+a warning.
 
 Treat the `policy-source` result as the adoption gate for centrally managed
 policy:

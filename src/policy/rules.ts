@@ -1,3 +1,6 @@
+import { evaluateBlastCheck } from "../hooks/blast-check.js";
+import { evaluateDestructiveGuard } from "../hooks/destructive-guard.js";
+import { evaluateToolingEnforce } from "../hooks/tooling-enforce.js";
 import { isWorkflowCommitOrPrEvent, isWorkflowFileMutationEvent } from "./state.js";
 import type {
 	AgentEvent,
@@ -14,41 +17,57 @@ export const DEFAULT_POLICY_RULES: readonly PolicyRule[] = [
 	{
 		id: "harness.destructive.guard",
 		description: "Blocks or warns for destructive shell and file mutation actions.",
+		version: 2,
+		fingerprint: "paveda:harness.destructive.guard:event-tool-payload:v2",
 		evaluate: evaluateDestructiveGuardRule,
 	},
 	{
 		id: "harness.tooling.enforce",
 		description: "Requires preferred agent-native tools instead of shell file helpers.",
+		version: 2,
+		fingerprint: "paveda:harness.tooling.enforce:event-tool-payload:v2",
 		evaluate: evaluateToolingEnforceRule,
 	},
 	{
 		id: "harness.blast.check",
 		description: "Warns when high-blast-radius files such as dependency manifests change.",
+		version: 2,
+		fingerprint: "paveda:harness.blast.check:event-tool-payload:v2",
 		evaluate: evaluateBlastCheckRule,
 	},
 	{
 		id: "harness.cost.guard",
 		description: "Warns when a session is likely to need compaction or reset.",
+		version: 1,
+		fingerprint: "paveda:harness.cost.guard:source-results:v1",
 		evaluate: evaluateCostGuardRule,
 	},
 	{
 		id: "harness.test.process.cleanup",
 		description: "Records test-process cleanup side effects after test commands.",
+		version: 1,
+		fingerprint: "paveda:harness.test.process.cleanup:source-results:v1",
 		evaluate: evaluateTestProcessCleanupRule,
 	},
 	{
 		id: "workflow.plan-only.mutation-gate",
 		description: "Blocks file mutations after a plan-only prompt until explicit approval.",
+		version: 1,
+		fingerprint: "paveda:workflow.plan-only.mutation-gate:workflow-state:v1",
 		evaluate: evaluatePlanOnlyMutationRule,
 	},
 	{
 		id: "workflow.root-cause.mutation-gate",
 		description: "Blocks mutations during root-cause requests until evidence is observed.",
+		version: 1,
+		fingerprint: "paveda:workflow.root-cause.mutation-gate:workflow-state:v1",
 		evaluate: evaluateRootCauseMutationRule,
 	},
 	{
 		id: "workflow.verification.handoff-gate",
 		description: "Blocks commit, push, and PR handoff while verification evidence is pending.",
+		version: 2,
+		fingerprint: "paveda:workflow.verification.handoff-gate:verification-status:v2",
 		evaluate: evaluateVerificationHandoffRule,
 	},
 ];
@@ -58,7 +77,11 @@ function evaluateDestructiveGuardRule(input: PolicyRuleInput): PolicyDecision[] 
 		return [];
 	}
 
-	const result = input.sourceResults?.destructiveGuard;
+	const result =
+		input.sourceResults?.destructiveGuard ??
+		(input.sourceResults
+			? undefined
+			: evaluatePolicyToolPayload(input.event, evaluateDestructiveGuard));
 	if (!result) {
 		return [];
 	}
@@ -91,7 +114,11 @@ function evaluateToolingEnforceRule(input: PolicyRuleInput): PolicyDecision[] {
 		return [];
 	}
 
-	const result = input.sourceResults?.toolingEnforce;
+	const result =
+		input.sourceResults?.toolingEnforce ??
+		(input.sourceResults
+			? undefined
+			: evaluatePolicyToolPayload(input.event, evaluateToolingEnforce));
 	if (!result) {
 		return [];
 	}
@@ -124,7 +151,9 @@ function evaluateBlastCheckRule(input: PolicyRuleInput): PolicyDecision[] {
 		return [];
 	}
 
-	const result = input.sourceResults?.blastCheck;
+	const result =
+		input.sourceResults?.blastCheck ??
+		(input.sourceResults ? undefined : evaluatePolicyToolPayload(input.event, evaluateBlastCheck));
 	if (!result) {
 		return [];
 	}
@@ -306,6 +335,31 @@ function evidenceFromEvent(event: AgentEvent): Record<string, unknown> {
 		toolName: event.tool?.name,
 		cwd: event.cwd,
 		fileMutation: event.fileMutation,
+	};
+}
+
+function evaluatePolicyToolPayload<Result>(
+	event: AgentEvent,
+	evaluate: (input: NonNullable<PolicySourceResults["toolPayload"]>) => Result,
+): Result | undefined {
+	const toolPayload = toolPayloadFromEvent(event);
+	if (!toolPayload) {
+		return undefined;
+	}
+
+	return evaluate(toolPayload);
+}
+
+function toolPayloadFromEvent(
+	event: AgentEvent,
+): NonNullable<PolicySourceResults["toolPayload"]> | undefined {
+	if (!event.tool?.name) {
+		return undefined;
+	}
+
+	return {
+		toolName: event.tool.name,
+		toolInput: event.tool.input,
 	};
 }
 

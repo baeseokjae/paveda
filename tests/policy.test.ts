@@ -90,6 +90,96 @@ describe("policy runtime", () => {
 		]);
 	});
 
+	it("evaluates destructive guard from normalized events without source results", () => {
+		const engine = new PolicyEngine();
+		const event = normalizeAgentEvent({
+			sessionId: "session-event-destructive",
+			lifecycle: "tool.execute.before",
+			matcher: "Bash",
+			ts: 200,
+			payload: {
+				host: "claude-code",
+				tool: "Bash",
+				raw: {
+					tool_input: { command: "rm -rf /" },
+				},
+			},
+		});
+
+		const evaluation = engine.evaluate({ event });
+
+		expect(evaluation.decisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "D-003",
+					action: "deny",
+					enforced: true,
+				}),
+			]),
+		);
+	});
+
+	it("evaluates tooling enforcement from normalized events without source results", () => {
+		const engine = new PolicyEngine();
+		const event = normalizeAgentEvent({
+			sessionId: "session-event-tooling",
+			lifecycle: "tool.execute.before",
+			matcher: "Bash",
+			ts: 200,
+			payload: {
+				host: "claude-code",
+				tool: "Bash",
+				raw: {
+					tool_input: { command: "grep -R token src" },
+				},
+			},
+		});
+
+		const evaluation = engine.evaluate({ event });
+
+		expect(evaluation.decisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "T-005",
+					action: "deny",
+					enforced: true,
+				}),
+			]),
+		);
+	});
+
+	it("evaluates blast checks from normalized events without source results", () => {
+		const engine = new PolicyEngine();
+		const event = normalizeAgentEvent({
+			sessionId: "session-event-blast",
+			lifecycle: "tool.execute.before",
+			matcher: "Edit",
+			ts: 200,
+			payload: {
+				host: "claude-code",
+				tool: "Edit",
+				raw: {
+					tool_input: {
+						file_path: "/repo/package.json",
+						new_string: '"dependencies": { "typescript": "^5.9.0" }',
+					},
+				},
+			},
+		});
+
+		const evaluation = engine.evaluate({ event });
+
+		expect(evaluation.decisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "B-001",
+					action: "warn",
+					enforced: false,
+				}),
+			]),
+		);
+	});
+
 	it("downgrades hard decisions when a host cannot block native tool calls", () => {
 		const engine = new PolicyEngine({
 			hostCapability: resolveHostCapability("legacy-host"),
@@ -155,6 +245,7 @@ describe("policy runtime", () => {
 			phase: "executing",
 			mutationRequiresApproval: true,
 			pendingVerification: true,
+			lastVerificationStatus: null,
 			lastPrompt: "계획만 세워줘. 아직 수정하지 마.",
 		});
 	});
@@ -182,6 +273,8 @@ describe("policy runtime", () => {
 				rootCauseEvidenceRequired: false,
 				rootCauseEvidenceObserved: false,
 				pendingVerification: false,
+				lastVerificationStatus: null,
+				lastVerificationCommand: null,
 				lastPrompt: "plan only",
 				evidence: [],
 				updatedAt: 100,
@@ -223,6 +316,8 @@ describe("policy runtime", () => {
 				rootCauseEvidenceRequired: false,
 				rootCauseEvidenceObserved: false,
 				pendingVerification: false,
+				lastVerificationStatus: null,
+				lastVerificationCommand: null,
 				lastPrompt: "plan only",
 				evidence: [],
 				updatedAt: 100,

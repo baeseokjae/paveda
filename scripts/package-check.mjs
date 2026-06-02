@@ -1690,7 +1690,7 @@ function assertPackagedClaudeInstallUsesCurrentCli(cliPath, projectRoot) {
 	const installedCommands = Object.values(settings?.hooks ?? {}).flatMap((matchers) =>
 		matchers.flatMap((matcher) => matcher?.hooks ?? []).map((hook) => hook?.command),
 	);
-	if (installedCommands.filter((command) => command === expectedCommand).length !== 4) {
+	if (installedCommands.filter((command) => command === expectedCommand).length !== 7) {
 		fail("packaged CLI smoke failed: Claude Code hooks do not all use the current CLI command");
 	}
 }

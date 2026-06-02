@@ -61,8 +61,9 @@ unsupported model frontmatter. Custom target smoke also runs installed
 `/specify` and `/do` helper scripts against packaged fixtures. Policy
 control-plane smoke creates a signed policy bundle with an ephemeral Ed25519
 key, verifies it through a keyring, writes a policy cache envelope, and confirms
-`doctor --enforcement --policy-cache`, `adoption-report --policy-cache`, and
-`hook claude-code` all expose the verified bundle source without runtime drift.
+`doctor --enforcement --policy-cache`, `adoption-report --policy-cache`,
+`hook claude-code`, and `mcp serve --policy-cache` all expose the verified
+bundle source without runtime drift.
 
 ## Tarball Smoke Test
 
@@ -132,10 +133,11 @@ Expected results:
   updates their lifecycle status.
 - `adoption-report` summarizes host readiness, `/do` route gate behavior, and
   runtime smoke in one result.
-- `policy bundle` emits deterministic rule/capability metadata with a canonical
-  SHA-256 digest; signed bundles verify through a trusted keyring.
+- `policy bundle` emits deterministic rule version/fingerprint and capability
+  metadata with a canonical SHA-256 digest; signed bundles verify through a
+  trusted keyring.
 - `policy pull` writes a verified cache envelope that `doctor`, `adoption-report`,
-  and runtime hook dispatch can all read.
+  runtime hook dispatch, and MCP gateway execution can all read.
 - `doctor --enforcement --policy-cache` and `adoption-report --policy-cache`
   report `policy-source` with the verified digest/key metadata and
   `runtimeDrift.ok: true`.

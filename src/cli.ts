@@ -311,6 +311,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			dbPath: readOption(args, "--db"),
 			storeScope: parseStoreScope(readOption(args, "--store-scope")),
 			sessionId: readOption(args, "--session"),
+			policyCachePath: readOption(args, "--policy-cache"),
 		});
 		return;
 	}
@@ -1694,7 +1695,7 @@ function shellQuote(value: string): string {
 function printHelp(): void {
 	console.log(`paveda <command> [options]
 
-Portable agent harness for host-specific skill bundles, hooks, routing, and checks.
+Portable policy runtime for agent workflows, host adapters, signed bundles, routing, and checks.
 
 Hosts:
   harness | claude-code | codex | pi | hermes
@@ -1703,7 +1704,7 @@ Common flow:
   init --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--include-optional] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write] [--force]
   adoption-report --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--policy-cache path] [--runtime-smoke] [--db path] [--store-scope project|user] [--session id] [--json]
   doctor [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--policy-cache path] [--enforcement] [--json]
-  mcp serve [--cwd path] [--db path] [--store-scope project|user] [--session id]
+  mcp serve [--cwd path] [--db path] [--store-scope project|user] [--session id] [--policy-cache path]
   skills status [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path]
   route [--skill do] [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--session id] [--result success|retry|abort] [--tool-retries n] [--verify-failures n] [--ambiguity-score n] [--elapsed-minutes n] [--db path] [--store-scope project|user]
 

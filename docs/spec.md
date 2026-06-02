@@ -21,7 +21,7 @@ decisions:
 Paveda는 agent workflow를 **단독 오픈소스 policy runtime**으로 제공한다. 이 런타임은:
 
 - `PolicyEngine`, 공통 `AgentEvent`/`PolicyDecision`, host capability matrix, EventStore lineage를 권위 있는 정책 판단 경로로 둔다.
-- Runtime rule metadata와 host capability matrix를 signed policy bundle로 export하고, remote/file source에서 pull한 bundle을 trusted keyring으로 검증한다.
+- Runtime rule version/fingerprint metadata와 host capability matrix를 signed policy bundle로 export하고, remote/file source에서 pull한 bundle을 trusted keyring으로 검증한다.
 - 호스트별 agent runtime에 설치되는 adapter/hook 설정, skill loader, hook profile, EventStore, PAL Router 등과 core workflow skills(`/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, `/surgical-edits`)를 함께 제공한다.
 - Optional portable skills(`/docs-writer`, `/review`, `/browser-validate`, `/dead-code`)는 기본 설치에서 제외하고 명시적으로 선택한 경우에만 host bundle에 렌더링한다.
 - 소비 프로젝트의 `.claude`, `.codex`, `.pi`, `.hermes` 파일은 Paveda installer가 생성/갱신하는 host별 compatibility export다.
@@ -176,10 +176,10 @@ export PAVEDA_POLICY_CACHE=.harness/policy-cache.json # verified bundle cache me
 | 추상 이벤트 | Claude Code | Codex | Hermes | Pi |
 |---|---|---|---|---|
 | `session.created` | SessionStart | SessionStart | on_session_start | session_start |
-| `prompt.submitted` | - | UserPromptSubmit | pre_llm_call / pre_gateway_dispatch | input / before_agent_start |
+| `prompt.submitted` | UserPromptSubmit | UserPromptSubmit | pre_llm_call / pre_gateway_dispatch | input / before_agent_start |
 | `tool.execute.before` | PreToolUse | PreToolUse / PermissionRequest | pre_tool_call | tool_call |
-| `tool.execute.after` | PostToolUse | PostToolUse | post_tool_call / transform_tool_result | tool_result / tool_execution_end |
-| `session.completed` | Stop | Stop | on_session_end | session_shutdown |
+| `tool.execute.after` | PostToolUse / PostToolUseFailure | PostToolUse | post_tool_call / transform_tool_result | tool_result / tool_execution_end |
+| `session.completed` | Stop / SessionEnd | Stop | on_session_end | session_shutdown |
 
 Host bundle installer는 별도 레이어로 `harness`, `claude-code`, `codex`, `pi`,
 `hermes` compatibility 산출물을 생성한다.

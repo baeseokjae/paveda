@@ -1,9 +1,17 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { generateKeyPairSync } from "node:crypto";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { executeMcpTool } from "../src/mcp/executor.js";
 import { PAVEDA_MCP_TOOLS, handleMcpRequest } from "../src/mcp/server.js";
+import {
+	type PolicyBundle,
+	createPolicyBundle,
+	createPolicyBundleCacheEntry,
+	signPolicyBundle,
+	verifySignedPolicyBundleWithKeyring,
+} from "../src/policy/index.js";
 import { EventStore } from "../src/store/index.js";
 
 const tempDirs: string[] = [];
@@ -94,6 +102,75 @@ describe("MCP gateway", () => {
 			]),
 		);
 		expect(store.replay("mcp-block").map((event) => event.type)).toContain("mcp.tool.blocked");
+
+		store.close();
+	});
+
+	it("records verified policy source evidence for MCP policy decisions", () => {
+		const cwd = makeTempDir();
+		const store = openTempStore(cwd);
+		const cachePath = writePolicyCacheEntry(cwd, ".harness/policy-cache.json");
+
+		const result = executeMcpTool({
+			name: "paveda.shell",
+			arguments: { command: "rm -rf /" },
+			cwd,
+			sessionId: "mcp-policy-source",
+			ts: 100,
+			policyCachePath: ".harness/policy-cache.json",
+			store,
+		});
+
+		expect(result).toMatchObject({
+			blocked: true,
+			policySource: {
+				type: "bundle-cache",
+				cachePath,
+				keyId: "mcp-policy-key",
+			},
+			policyEvaluation: {
+				policySource: {
+					type: "bundle-cache",
+					keyId: "mcp-policy-key",
+				},
+			},
+		});
+		expect(result.policyDecisions).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					ruleId: "D-003",
+					evidence: expect.objectContaining({
+						policySource: expect.objectContaining({
+							type: "bundle-cache",
+							keyId: "mcp-policy-key",
+						}),
+						details: expect.any(Object),
+					}),
+				}),
+			]),
+		);
+
+		store.close();
+	});
+
+	it("fails closed when MCP policy cache cannot be verified", () => {
+		const cwd = makeTempDir();
+		const store = openTempStore(cwd);
+		mkdirSync(join(cwd, ".harness"), { recursive: true });
+		writeFileSync(join(cwd, ".harness", "policy-cache.json"), "{}\n");
+
+		expect(() =>
+			executeMcpTool({
+				name: "paveda.shell",
+				arguments: { command: "touch should-not-run" },
+				cwd,
+				sessionId: "mcp-invalid-policy-source",
+				ts: 100,
+				policyCachePath: ".harness/policy-cache.json",
+				store,
+			}),
+		).toThrow("Policy cache is invalid:");
+		expect(existsSync(join(cwd, "should-not-run"))).toBe(false);
 
 		store.close();
 	});
@@ -229,4 +306,32 @@ function makeTempDir(): string {
 
 function openTempStore(cwd: string): EventStore {
 	return new EventStore(join(cwd, ".harness", "store.db"));
+}
+
+function writePolicyCacheEntry(
+	cwd: string,
+	relativePath: string,
+	transformBundle: (bundle: PolicyBundle) => PolicyBundle = (bundle) => bundle,
+): string {
+	const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+	const privateKeyPem = privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+	const publicKeyPem = publicKey.export({ format: "pem", type: "spki" }).toString();
+	const bundle = transformBundle(
+		createPolicyBundle({
+			issuer: "mcp-policy-source-test",
+			generatedAt: "2026-06-01T00:00:00.000Z",
+		}),
+	);
+	const signedBundle = signPolicyBundle(bundle, { privateKeyPem, keyId: "mcp-policy-key" });
+	const verification = verifySignedPolicyBundleWithKeyring(signedBundle, {
+		keys: [{ keyId: "mcp-policy-key", publicKeyPem }],
+	});
+	const cacheEntry = createPolicyBundleCacheEntry(signedBundle, verification, {
+		source: "https://policy.example.invalid/mcp-policy.signed.json",
+		cachedAt: "2026-06-01T00:01:00.000Z",
+	});
+	const path = join(cwd, relativePath);
+	mkdirSync(join(path, ".."), { recursive: true });
+	writeFileSync(path, `${JSON.stringify(cacheEntry, null, 2)}\n`);
+	return path;
 }

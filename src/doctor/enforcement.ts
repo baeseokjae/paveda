@@ -63,6 +63,11 @@ interface SyntheticPolicyDecision {
 	enforced: boolean;
 }
 
+interface EnforcementProbeStatusInput {
+	effectiveTier: EnforcementTier;
+	syntheticProbe?: Pick<SyntheticProbeResult, "executed" | "passed">;
+}
+
 const ENFORCEMENT_PROBES: readonly EnforcementProbe[] = [
 	{
 		name: "destructive-shell-command",
@@ -170,6 +175,7 @@ function buildProbeDetails(input: {
 		hostCapability: input.hostCapability,
 		probe: input.probe,
 	});
+	const failedProbes = resolveEnforcementFailedProbes({ effectiveTier, syntheticProbe });
 	const requiredRemediation =
 		effectiveTier === "block" || effectiveTier === "gate" ? [] : [input.probe.remediation];
 
@@ -179,7 +185,7 @@ function buildProbeDetails(input: {
 		toolMatchers: input.probe.toolMatchers,
 		effectiveTier,
 		passedProbes: [`capability:${effectiveTier}`],
-		failedProbes: effectiveTier === "verify" ? ["native-pre-tool-enforcement"] : [],
+		failedProbes,
 		bypassPaths,
 		requiredRemediation,
 		configFiles,
@@ -328,6 +334,8 @@ function buildSyntheticPolicyInput(
 				rootCauseEvidenceRequired: false,
 				rootCauseEvidenceObserved: false,
 				pendingVerification: true,
+				lastVerificationStatus: null,
+				lastVerificationCommand: null,
 				lastPrompt: null,
 				evidence: ["mutation:Edit"],
 				updatedAt: ts,
@@ -418,11 +426,35 @@ function resolveBypassPaths(hostCapability: HostCapability, probe: EnforcementPr
 }
 
 function statusForProbe(details: EnforcementProbeDetails): DoctorCheckStatus {
+	return resolveEnforcementProbeStatus(details);
+}
+
+export function resolveEnforcementProbeStatus(
+	details: EnforcementProbeStatusInput,
+): DoctorCheckStatus {
+	if (details.syntheticProbe?.executed && details.syntheticProbe.passed === false) {
+		return "fail";
+	}
+
 	if (details.effectiveTier === "block" || details.effectiveTier === "gate") {
 		return "pass";
 	}
 
 	return "warn";
+}
+
+export function resolveEnforcementFailedProbes(details: EnforcementProbeStatusInput): string[] {
+	const failedProbes: string[] = [];
+
+	if (details.effectiveTier === "verify") {
+		failedProbes.push("native-pre-tool-enforcement");
+	}
+
+	if (details.syntheticProbe?.executed && details.syntheticProbe.passed === false) {
+		failedProbes.push("synthetic-policy-decision");
+	}
+
+	return failedProbes;
 }
 
 function configFilesForHost(host: HostSkillBundleTarget): string[] {

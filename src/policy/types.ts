@@ -92,6 +92,9 @@ export interface PolicyEvaluation {
 export interface PolicyRule {
 	id: string;
 	description: string;
+	version?: number;
+	fingerprint?: string;
+	parameters?: Record<string, unknown>;
 	evaluate(input: PolicyRuleInput): PolicyDecision[];
 }
 

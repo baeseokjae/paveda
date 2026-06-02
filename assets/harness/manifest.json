@@ -1,7 +1,7 @@
 {
 	"schemaVersion": 1,
 	"name": "paveda-core-harness",
-	"description": "Canonical Paveda harness bundle. Host installers adapt these assets into Claude Code, Codex, pi, Hermes, or other agent runtimes.",
+	"description": "Canonical Paveda compatibility bundle. Host installers adapt these skills, instructions, and context modules into Claude Code, Codex, pi, Hermes, or other agent runtimes.",
 	"host": "canonical",
 	"status": "active",
 	"instructions": {

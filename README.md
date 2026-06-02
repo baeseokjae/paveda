@@ -132,7 +132,7 @@ smoke 수준으로 측정하고 spec의 비기능 목표를 넘으면 실패한�
 - Hermes bundle은 `.hermes/config.yaml`에 설치된 skill root를 등록한다.
 - `doctor --host <host>`가 host skill root, context modules, instruction file, model metadata, `/do` router metadata, Codex skill metadata, Claude Code hook settings, project hook/check 상태를 점검한다.
 - ambiguity gate smoke가 `blocked: true`를 반환한다.
-- `policy bundle`/`policy pull`이 rule metadata, host capability matrix, canonical SHA-256 digest를 포함한 deterministic JSON artifact를 생성하고, trusted keyring 검증 후 cache envelope을 기록한다.
+- `policy bundle`/`policy pull`이 rule version/fingerprint metadata, host capability matrix, canonical SHA-256 digest를 포함한 deterministic JSON artifact를 생성하고, trusted keyring 검증 후 cache envelope을 기록한다.
 - `doctor --enforcement --policy-cache`와 `adoption-report --policy-cache`가 현재 verified policy source digest/key metadata와 `runtimeDrift.ok: true`를 노출한다.
 
 ## Claude Code Hook Install
@@ -236,8 +236,9 @@ node dist/cli.js policy verify --bundle /tmp/paveda-policy.signed.json --keyring
 node dist/cli.js policy pull --source https://policy.example.invalid/paveda-policy.signed.json --keyring /path/to/policy-keyring.json --cache .harness/policy-cache.json --write
 ```
 
-`policy bundle`은 현재 runtime rule metadata와 host capability matrix를
-deterministic JSON artifact로 export하고 `canonicalSha256` digest를 포함한다.
+`policy bundle`은 현재 runtime rule metadata(version/fingerprint 포함)와 host
+capability matrix를 deterministic JSON artifact로 export하고 `canonicalSha256`
+digest를 포함한다.
 `--private-key`를 전달하면 Ed25519 detached signature를 추가하고,
 `policy verify`는 digest drift, key mismatch, signature mismatch를 분리해서
 보고한다. `policy pull`은 path, `file://`, `http://`, `https://` source에서
@@ -265,7 +266,8 @@ export PAVEDA_POLICY_CACHE=.harness/policy-cache.json
 profile 기본값보다 우선한다.
 `PAVEDA_POLICY_CACHE`를 설정하면 hook runtime이 검증된 policy cache envelope을
 읽고, 각 `PolicyEvaluation`과 `policy.decision` evidence에 bundle digest/key
-metadata를 남긴다.
+metadata를 남긴다. MCP gateway는 같은 cache를 `mcp serve --policy-cache`로
+명시적으로 받을 수 있다.
 
 ## EventStore Status
 
@@ -288,13 +290,16 @@ node dist/cli.js export-decisions --markdown --write /tmp/paveda-decisions.md
 node dist/cli.js instincts add --scope project --pattern "Run focused tests first" --confidence 0.8
 node dist/cli.js instincts --scope project --status active
 node dist/cli.js instincts set-status --id 1 --status promoted
-node dist/cli.js mcp serve --cwd /path/to/project
+node dist/cli.js mcp serve --cwd /path/to/project --policy-cache .harness/policy-cache.json
 ```
 
 `mcp serve`는 stdio JSON-RPC MCP gateway를 열고 `paveda.search`,
 `paveda.read`, `paveda.patch`, `paveda.shell`, `paveda.git`, `paveda.test` wrapper
 tool을 노출한다. 각 tool call은 `AgentEvent`로 정규화되고 `PolicyEngine`과
 EventStore 기록을 통과한 뒤, deny decision이 enforced된 경우 실행 전에 차단된다.
+`--policy-cache`를 전달하면 verified bundle source metadata가 `PolicyEvaluation`과
+저장된 `policy.decision` evidence에 함께 기록되며, cache 검증 실패 시 tool 실행
+전에 실패한다.
 
 `--markdown` renders a compact session table for reports. `--write` saves the
 rendered status instead of printing it. `--exit-code` exits non-zero when the

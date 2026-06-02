@@ -44,6 +44,15 @@ describe("policy bundle", () => {
 			},
 		});
 		expect(bundle.rules.map((rule) => rule.id)).toContain("workflow.verification.handoff-gate");
+		expect(bundle.rules).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "harness.destructive.guard",
+					version: expect.any(Number),
+					fingerprint: expect.stringContaining("harness.destructive.guard"),
+				}),
+			]),
+		);
 		expect(bundle.hostCapabilities.map((capability) => capability.host)).toEqual([
 			"claude-code",
 			"codex",
@@ -263,6 +272,40 @@ describe("policy bundle", () => {
 					host: "codex",
 					bundleCapability: expect.objectContaining({ nativeToolBypassRisk: "high" }),
 					localCapability: expect.objectContaining({ nativeToolBypassRisk: "medium" }),
+				}),
+			],
+		});
+	});
+
+	it("detects rule fingerprint drift even when descriptions are unchanged", () => {
+		const bundle = createPolicyBundle({
+			issuer: "control-plane-test",
+			generatedAt: "2026-06-01T00:00:00.000Z",
+		});
+		const driftedRule = bundle.rules[0];
+		if (!driftedRule) {
+			throw new Error("Expected at least one policy rule");
+		}
+		const drifted = {
+			...bundle,
+			rules: [
+				{
+					...driftedRule,
+					fingerprint: "paveda:test:fingerprint-drift",
+				},
+				...bundle.rules.slice(1),
+			],
+		};
+
+		expect(comparePolicyBundleToRuntime(drifted)).toMatchObject({
+			ok: false,
+			changedRules: [
+				expect.objectContaining({
+					id: driftedRule.id,
+					bundleDescription: driftedRule.description,
+					localDescription: driftedRule.description,
+					bundleFingerprint: "paveda:test:fingerprint-drift",
+					localFingerprint: driftedRule.fingerprint,
 				}),
 			],
 		});

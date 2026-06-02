@@ -3,6 +3,10 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+	resolveEnforcementFailedProbes,
+	resolveEnforcementProbeStatus,
+} from "../src/doctor/enforcement.js";
 import { formatDoctorReport, runDoctor } from "../src/doctor/index.js";
 import { installHostSkillBundle } from "../src/host-bundles/index.js";
 import { addPavedaClaudeCodeSettings } from "../src/install/claude-code.js";
@@ -735,6 +739,35 @@ describe("doctor", () => {
 				},
 			},
 		});
+	});
+
+	it("fails enforcement probe status when synthetic policy decisions are missing", () => {
+		const failedSyntheticProbe = { executed: true, passed: false };
+
+		expect(
+			resolveEnforcementProbeStatus({
+				effectiveTier: "block",
+				syntheticProbe: failedSyntheticProbe,
+			}),
+		).toBe("fail");
+		expect(
+			resolveEnforcementFailedProbes({
+				effectiveTier: "block",
+				syntheticProbe: failedSyntheticProbe,
+			}),
+		).toEqual(["synthetic-policy-decision"]);
+		expect(
+			resolveEnforcementProbeStatus({
+				effectiveTier: "block",
+				syntheticProbe: { executed: true, passed: true },
+			}),
+		).toBe("pass");
+		expect(
+			resolveEnforcementProbeStatus({
+				effectiveTier: "mediate",
+				syntheticProbe: { executed: false, passed: null },
+			}),
+		).toBe("warn");
 	});
 
 	it("fails enforcement doctor without a host", () => {

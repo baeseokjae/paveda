@@ -273,7 +273,7 @@ Paveda는 host/action별 실효 강제력을 tier로 보고해야 한다.
 
 Claude Code는 첫 번째 strong enforcement target으로 둔다.
 
-- `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`을 `AgentEvent`로 매핑한다.
+- `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `SessionEnd`를 `AgentEvent`로 매핑한다.
 - Tier 1 block은 `permissionDecision: "deny"`로 반환한다.
 - 사용자 확인이 필요하면 `ask` decision을 host 응답으로 변환한다.
 - 기존 `.claude/settings.json` 설치기는 유지하되, 개념을 bundle installer가 아니라 Paveda adapter installer로 재정의한다.
@@ -325,7 +325,7 @@ Pi도 first-class adapter로 다룬다.
 다음 명령을 추가한다.
 
 ```bash
-paveda mcp serve
+paveda mcp serve --policy-cache .harness/policy-cache.json
 ```
 
 노출할 policy-aware tool:
@@ -337,7 +337,7 @@ paveda mcp serve
 - `paveda.git`
 - `paveda.test`
 
-모든 MCP tool call은 `AgentEvent`로 정규화하고, `PolicyEngine`을 통과하고, EventStore에 기록한 뒤, 허용된 경우에만 실행한다.
+모든 MCP tool call은 `AgentEvent`로 정규화하고, `PolicyEngine`을 통과하고, EventStore에 기록한 뒤, 허용된 경우에만 실행한다. `--policy-cache`가 있으면 verified bundle source metadata를 evaluation과 decision evidence에 남기고 cache 검증 실패 시 실행 전에 실패한다.
 
 MCP gateway는 Claude Code, Codex, Hermes, Pi 및 future host에서 공통 경로가 된다. 단, native host tool이 열려 있으면 bypass risk를 보고해야 한다.
 

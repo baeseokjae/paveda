@@ -1,7 +1,7 @@
 {
 	"name": "paveda",
 	"version": "0.1.0",
-	"description": "Portable agent harness — hook profiles, SQLite EventStore, PAL Router, SKILL.md loader",
+	"description": "Portable policy runtime for agent workflows — common events, host adapters, signed policy bundles, SQLite EventStore",
 	"type": "module",
 	"packageManager": "pnpm@10.13.1",
 	"main": "./dist/index.js",
@@ -39,7 +39,18 @@
 		"type": "git",
 		"url": "git+https://github.com/baeseokjae/paveda.git"
 	},
-	"keywords": ["agent-harness", "harness", "skill", "hook", "eventstore", "pal-router", "codex"],
+	"keywords": [
+		"agent-harness",
+		"policy-runtime",
+		"policy-engine",
+		"control-plane",
+		"skill",
+		"hook",
+		"mcp",
+		"eventstore",
+		"pal-router",
+		"codex"
+	],
 	"devDependencies": {
 		"@biomejs/biome": "^1.9.0",
 		"@types/node": "^22.0.0",

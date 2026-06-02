@@ -1,7 +1,14 @@
 import type { LifecycleEvent } from "../../core/index.js";
 import type { DispatchHookEventInput } from "../../hook-runtime/index.js";
 
-export type ClaudeCodeHookEventName = "SessionStart" | "PreToolUse" | "PostToolUse" | "Stop";
+export type ClaudeCodeHookEventName =
+	| "SessionStart"
+	| "UserPromptSubmit"
+	| "PreToolUse"
+	| "PostToolUse"
+	| "PostToolUseFailure"
+	| "Stop"
+	| "SessionEnd";
 
 export interface ClaudeCodeHookPayload {
 	hook_event_name?: string;
@@ -11,7 +18,9 @@ export interface ClaudeCodeHookPayload {
 	tool_name?: string;
 	tool_input?: unknown;
 	tool_response?: unknown;
+	prompt?: string;
 	stop_hook_active?: boolean;
+	reason?: string;
 	[key: string]: unknown;
 }
 
@@ -41,9 +50,12 @@ export function fromClaudeCodeHookPayload(
 export function parseClaudeCodeHookEventName(value: unknown): ClaudeCodeHookEventName {
 	if (
 		value === "SessionStart" ||
+		value === "UserPromptSubmit" ||
 		value === "PreToolUse" ||
 		value === "PostToolUse" ||
-		value === "Stop"
+		value === "PostToolUseFailure" ||
+		value === "Stop" ||
+		value === "SessionEnd"
 	) {
 		return value;
 	}
@@ -55,17 +67,25 @@ export function toLifecycleEvent(eventName: ClaudeCodeHookEventName): LifecycleE
 	switch (eventName) {
 		case "SessionStart":
 			return "session.created";
+		case "UserPromptSubmit":
+			return "prompt.submitted";
 		case "PreToolUse":
 			return "tool.execute.before";
 		case "PostToolUse":
+		case "PostToolUseFailure":
 			return "tool.execute.after";
 		case "Stop":
+		case "SessionEnd":
 			return "session.completed";
 	}
 }
 
 function getMatcher(eventName: ClaudeCodeHookEventName, payload: ClaudeCodeHookPayload): string {
-	if (eventName === "PreToolUse" || eventName === "PostToolUse") {
+	if (
+		eventName === "PreToolUse" ||
+		eventName === "PostToolUse" ||
+		eventName === "PostToolUseFailure"
+	) {
 		return typeof payload.tool_name === "string" ? payload.tool_name : "*";
 	}
 
@@ -76,6 +96,8 @@ function getHookName(eventName: ClaudeCodeHookEventName, payload: ClaudeCodeHook
 	switch (eventName) {
 		case "SessionStart":
 			return "harness.session.context";
+		case "UserPromptSubmit":
+			return "paveda.lifecycle.prompt.submit";
 		case "PreToolUse":
 			if (payload.tool_name === "Bash") {
 				return "harness.destructive.guard";
@@ -89,6 +111,7 @@ function getHookName(eventName: ClaudeCodeHookEventName, payload: ClaudeCodeHook
 			}
 			return "paveda.lifecycle.tool.before";
 		case "PostToolUse":
+		case "PostToolUseFailure":
 			if (payload.tool_name === "Agent") {
 				return "harness.cost.guard";
 			}
@@ -97,6 +120,7 @@ function getHookName(eventName: ClaudeCodeHookEventName, payload: ClaudeCodeHook
 			}
 			return "paveda.lifecycle.tool.after";
 		case "Stop":
+		case "SessionEnd":
 			return "paveda.lifecycle.session.stop";
 	}
 }
@@ -123,8 +147,17 @@ function normalizePayload(
 		normalized.tool = payload.tool_name;
 	}
 
-	if (eventName === "Stop") {
-		normalized.status = payload.stop_hook_active ? "active" : "completed";
+	if (payload.prompt) {
+		normalized.prompt = payload.prompt;
+	}
+
+	if (eventName === "PostToolUseFailure") {
+		normalized.error = payload.reason ?? "Claude Code tool execution failed.";
+	}
+
+	if (eventName === "Stop" || eventName === "SessionEnd") {
+		normalized.status =
+			payload.stop_hook_active || payload.reason === "stop_hook_active" ? "active" : "completed";
 	}
 
 	return normalized;

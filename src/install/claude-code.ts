@@ -68,9 +68,12 @@ const DEFAULT_SESSION_START_MAX_CHARS = 8000;
 
 const HOOK_MATCHERS: readonly [event: string, matcher?: string][] = [
 	["SessionStart"],
+	["UserPromptSubmit"],
 	["PreToolUse", "*"],
 	["PostToolUse", "*"],
+	["PostToolUseFailure", "*"],
 	["Stop"],
+	["SessionEnd"],
 ];
 
 export function installClaudeCode(options: InstallClaudeCodeOptions = {}): InstallClaudeCodeResult {

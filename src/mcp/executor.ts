@@ -8,9 +8,11 @@ import { evaluateToolingEnforce } from "../hooks/tooling-enforce.js";
 import {
 	PolicyEngine,
 	type PolicyEvaluation,
+	type PolicyRuntimeSource,
 	type PolicySourceResults,
 	normalizeAgentEvent,
 	projectWorkflowState,
+	resolvePolicyRuntimeSource,
 } from "../policy/index.js";
 import type { EventRecord, EventStore, PolicyDecisionRecord } from "../store/index.js";
 
@@ -28,6 +30,7 @@ export interface ExecuteMcpToolOptions {
 	cwd?: string;
 	sessionId?: string;
 	ts?: number;
+	policyCachePath?: string;
 	store: EventStore;
 }
 
@@ -39,6 +42,7 @@ export interface McpToolExecutionResult {
 	output?: unknown;
 	error?: string;
 	events: EventRecord[];
+	policySource: PolicyRuntimeSource;
 	policyEvaluation: PolicyEvaluation;
 	policyDecisions: PolicyDecisionRecord[];
 }
@@ -59,6 +63,10 @@ export function executeMcpTool(options: ExecuteMcpToolOptions): McpToolExecution
 	const sessionId = options.sessionId ?? DEFAULT_SESSION_ID;
 	const ts = options.ts ?? Date.now();
 	const prepared = prepareMcpTool(toolName, options.arguments, cwd);
+	const policySource = resolvePolicySource({
+		cachePath: options.policyCachePath,
+		cwd,
+	});
 	const payload = {
 		host: "mcp",
 		cwd,
@@ -82,6 +90,7 @@ export function executeMcpTool(options: ExecuteMcpToolOptions): McpToolExecution
 		event: agentEvent,
 		workflowState,
 		sourceResults,
+		policySource,
 	});
 	const events: EventRecord[] = [
 		options.store.append({
@@ -110,6 +119,7 @@ export function executeMcpTool(options: ExecuteMcpToolOptions): McpToolExecution
 			blocked: true,
 			error: blockingDecision.reason,
 			events,
+			policySource,
 			policyEvaluation,
 			policyDecisions,
 		};
@@ -148,6 +158,7 @@ export function executeMcpTool(options: ExecuteMcpToolOptions): McpToolExecution
 			blocked: false,
 			output,
 			events,
+			policySource,
 			policyEvaluation,
 			policyDecisions,
 		};
@@ -171,6 +182,7 @@ export function executeMcpTool(options: ExecuteMcpToolOptions): McpToolExecution
 			blocked: false,
 			error: message,
 			events,
+			policySource,
 			policyEvaluation,
 			policyDecisions,
 		};
@@ -349,7 +361,7 @@ function recordPolicyDecisions(
 			tier: decision.tier,
 			reason: decision.reason,
 			enforced: decision.enforced,
-			evidence: decision.evidence,
+			evidence: withPolicySourceEvidence(decision.evidence, input.evaluation.policySource),
 		});
 		records.push(record);
 		input.events.push(
@@ -363,6 +375,28 @@ function recordPolicyDecisions(
 	}
 
 	return records;
+}
+
+function withPolicySourceEvidence(
+	evidence: unknown,
+	policySource: PolicyRuntimeSource,
+): Record<string, unknown> {
+	return {
+		policySource,
+		details: evidence,
+	};
+}
+
+function resolvePolicySource(input: {
+	cachePath?: string;
+	cwd: string;
+}): PolicyRuntimeSource {
+	const resolution = resolvePolicyRuntimeSource({ cachePath: input.cachePath, cwd: input.cwd });
+	if (!resolution.ok) {
+		throw new Error(`Policy cache is invalid: ${resolution.error}`);
+	}
+
+	return resolution.policySource;
 }
 
 function runCommand(command: string, args: string[], cwd: string): string {

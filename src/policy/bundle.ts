@@ -23,6 +23,9 @@ export interface PolicyBundle {
 export interface PolicyBundleRule {
 	id: string;
 	description: string;
+	version?: number;
+	fingerprint?: string;
+	parameters?: Record<string, unknown>;
 }
 
 export interface PolicyBundleArtifact {
@@ -129,6 +132,12 @@ export interface PolicyBundleRuleDrift {
 	id: string;
 	bundleDescription?: string;
 	localDescription?: string;
+	bundleVersion?: number;
+	localVersion?: number;
+	bundleFingerprint?: string;
+	localFingerprint?: string;
+	bundleParameters?: Record<string, unknown>;
+	localParameters?: Record<string, unknown>;
 }
 
 export interface PolicyBundleHostCapabilityDrift {
@@ -149,6 +158,9 @@ export function createPolicyBundle(options: CreatePolicyBundleOptions = {}): Pol
 		rules: DEFAULT_POLICY_RULES.map((rule) => ({
 			id: rule.id,
 			description: rule.description,
+			...(rule.version ? { version: rule.version } : {}),
+			...(rule.fingerprint ? { fingerprint: rule.fingerprint } : {}),
+			...(rule.parameters ? { parameters: rule.parameters } : {}),
 		})),
 		hostCapabilities: listHostCapabilities(),
 	};
@@ -418,7 +430,7 @@ export function comparePolicyBundleToRuntime(bundle: PolicyBundle): PolicyBundle
 	const changedRules = [...localRules.entries()]
 		.flatMap(([id, localRule]) => {
 			const bundleRule = bundleRules.get(id);
-			if (!bundleRule || bundleRule.description === localRule.description) {
+			if (!bundleRule || policyBundleRulesMatch(bundleRule, localRule)) {
 				return [];
 			}
 			return [
@@ -426,6 +438,16 @@ export function comparePolicyBundleToRuntime(bundle: PolicyBundle): PolicyBundle
 					id,
 					bundleDescription: bundleRule.description,
 					localDescription: localRule.description,
+					...(bundleRule.version !== undefined ? { bundleVersion: bundleRule.version } : {}),
+					...(localRule.version !== undefined ? { localVersion: localRule.version } : {}),
+					...(bundleRule.fingerprint !== undefined
+						? { bundleFingerprint: bundleRule.fingerprint }
+						: {}),
+					...(localRule.fingerprint !== undefined
+						? { localFingerprint: localRule.fingerprint }
+						: {}),
+					...(bundleRule.parameters ? { bundleParameters: bundleRule.parameters } : {}),
+					...(localRule.parameters ? { localParameters: localRule.parameters } : {}),
 				},
 			];
 		})
@@ -478,6 +500,15 @@ export function comparePolicyBundleToRuntime(bundle: PolicyBundle): PolicyBundle
 		changedHostCapabilities,
 		duplicateHostIds,
 	};
+}
+
+function policyBundleRulesMatch(left: PolicyBundleRule, right: PolicyBundleRule): boolean {
+	return (
+		left.description === right.description &&
+		left.version === right.version &&
+		left.fingerprint === right.fingerprint &&
+		canonicalPolicyJson(left.parameters ?? {}) === canonicalPolicyJson(right.parameters ?? {})
+	);
 }
 
 export function digestPolicyBundle(bundle: PolicyBundle): string {

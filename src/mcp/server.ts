@@ -8,6 +8,7 @@ export interface McpServerOptions {
 	dbPath?: string;
 	storeScope?: StoreScope;
 	sessionId?: string;
+	policyCachePath?: string;
 }
 
 export interface JsonRpcRequest {
@@ -170,6 +171,7 @@ function readToolCall(
 		arguments: params.arguments,
 		cwd: context.cwd,
 		sessionId: context.sessionId,
+		policyCachePath: context.policyCachePath,
 		store: context.store,
 	};
 }
