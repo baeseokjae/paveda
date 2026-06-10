@@ -148,6 +148,35 @@ describe("projection index and drift handling", () => {
 		expect(existsSync(join(dir, ".paveda", "ledger", "paveda.db"))).toBe(true);
 	});
 
+	it("blocks projection content that changes after an override was approved", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-projection-override-drift-"));
+		tempDirs.push(dir);
+		initializePaveda({ host: "codex", cwd: dir, skills: ["do"], write: true });
+		writeFileSync(join(dir, "AGENTS.md"), "temporary override\n");
+
+		const result = approveProjectionOverride({
+			cwd: dir,
+			host: "codex",
+			path: "AGENTS.md",
+			reason: "Temporary host-specific instructions during rollout",
+			actor: "test",
+			scope: "project",
+			expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+			compensatingControl: "Review before next projection regenerate",
+			write: true,
+		});
+
+		writeFileSync(join(dir, "AGENTS.md"), "unapproved follow-up drift\n");
+		const status = checkProjectionStatus({ cwd: dir, host: "codex", path: "AGENTS.md" });
+
+		expect(result.status.entries[0]).toMatchObject({ state: "overridden" });
+		expect(status.ok).toBe(false);
+		expect(status.entries[0]).toMatchObject({
+			state: "drifted",
+			override: null,
+		});
+	});
+
 	it("blocks release profile projection execution in MVP", () => {
 		const dir = mkdtempSync(join(tmpdir(), "paveda-projection-release-"));
 		tempDirs.push(dir);

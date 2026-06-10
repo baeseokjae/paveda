@@ -418,6 +418,21 @@ describe("EventStore", () => {
 			hostMapping: { primitive: "pnpm test" },
 		});
 		expect(
+			store.upsertPhase({
+				runId: run.runId,
+				phaseId: "unit-test",
+				status: "completed",
+				endedAt: 150,
+			}),
+		).toMatchObject({
+			runId: run.runId,
+			phaseId: "unit-test",
+			status: "completed",
+			startedAt: 110,
+			endedAt: 150,
+			hostMapping: { primitive: "pnpm test" },
+		});
+		expect(
 			store.appendPhaseEvent({
 				runId: run.runId,
 				phaseId: "unit-test",

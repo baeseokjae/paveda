@@ -1378,10 +1378,10 @@ export class EventStore {
 					"VALUES (?, ?, ?, ?, ?, ?, ?)",
 					"ON CONFLICT(run_id, phase_id) DO UPDATE SET",
 					"status = excluded.status,",
-					"started_at = excluded.started_at,",
-					"ended_at = excluded.ended_at,",
-					"host_mapping = excluded.host_mapping,",
-					"metadata = excluded.metadata",
+					"started_at = COALESCE(excluded.started_at, phases.started_at),",
+					"ended_at = COALESCE(excluded.ended_at, phases.ended_at),",
+					"host_mapping = COALESCE(excluded.host_mapping, phases.host_mapping),",
+					"metadata = COALESCE(excluded.metadata, phases.metadata)",
 				].join(" "),
 			)
 			.run(
