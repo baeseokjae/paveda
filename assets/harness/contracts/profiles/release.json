@@ -1,0 +1,249 @@
+{
+  "profile": "release",
+  "schemaVersion": "1.0.0",
+  "contractVersion": "1.0.0",
+  "minimumPavedaVersion": "0.1.0",
+  "description": "Release profile declaration. MVP must block before execution and report not_supported_in_mvp.",
+  "extends": "strict",
+  "scoreThresholds": [
+    {
+      "metric": "ambiguity_score",
+      "pass": 0.05,
+      "warn": 0.03,
+      "block": 0.1,
+      "repairTrigger": 0.05,
+      "overrideAllowed": false
+    },
+    {
+      "metric": "plan_quality_score",
+      "pass": 0.97,
+      "warn": 0.99,
+      "block": 0.9,
+      "repairTrigger": 0.96,
+      "overrideAllowed": false
+    },
+    {
+      "metric": "progress_score",
+      "pass": 0.95,
+      "warn": 0.98,
+      "block": 0.9,
+      "repairTrigger": 0.94,
+      "overrideAllowed": false
+    },
+    {
+      "metric": "match_score",
+      "pass": 0.99,
+      "warn": 1,
+      "block": 0.95,
+      "repairTrigger": 0.98,
+      "overrideAllowed": false
+    },
+    {
+      "metric": "verification_score",
+      "pass": 1,
+      "warn": 1,
+      "block": 0.999,
+      "repairTrigger": 1,
+      "overrideAllowed": false
+    },
+    {
+      "metric": "risk_score",
+      "pass": 0.1,
+      "warn": 0.05,
+      "block": 0.2,
+      "repairTrigger": 0.1,
+      "overrideAllowed": false
+    }
+  ],
+  "requiredGates": [
+    {
+      "id": "unit-gate",
+      "phase": "unit-test",
+      "evidenceKind": "unit_test",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "task changes executable behavior",
+      "capability": "test.unit",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": true,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "e2e-gate",
+      "phase": "e2e-test",
+      "evidenceKind": "e2e_test",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "task changes user-visible behavior or system boundary behavior",
+      "capability": "test.e2e",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": true,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "coverage-gate",
+      "phase": "unit-test",
+      "evidenceKind": "coverage",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "mixed"
+      ],
+      "conditionalWhen": "project policy declares coverage threshold",
+      "capability": "test.coverage",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "semantic-gate",
+      "phase": "semantic-adversarial-verification",
+      "evidenceKind": "semantic_review",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "release profile is active",
+      "capability": "semantic.review",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "risk-gate",
+      "phase": "semantic-adversarial-verification",
+      "evidenceKind": "risk_review",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "release profile is active",
+      "capability": "risk.review",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    }
+  ],
+  "verificationLadder": [
+    "command",
+    "unit_test",
+    "e2e_test",
+    "semantic_review",
+    "adversarial_review",
+    "risk_review",
+    "security_scan",
+    "manual_decision",
+    "host_event",
+    "typecheck",
+    "lint",
+    "build",
+    "coverage",
+    "trace",
+    "screenshot"
+  ],
+  "overridePolicy": {
+    "allowedModes": [
+      "import",
+      "regenerate"
+    ],
+    "auditRequired": true,
+    "releaseForbidden": [
+      "unit-gate",
+      "e2e-gate",
+      "coverage-gate",
+      "semantic-gate",
+      "risk-gate"
+    ],
+    "expiryRequired": true
+  },
+  "notApplicablePolicy": {
+    "allowedTaskTypes": [
+      "docs",
+      "metadata"
+    ],
+    "requiresRationale": true,
+    "requiresClassifierReason": true,
+    "ambiguousBehavior": "block"
+  },
+  "releaseSupport": {
+    "status": "not_supported_in_mvp",
+    "suggestedProfile": "strict",
+    "unimplementedGates": [
+      "release-signoff",
+      "full-conformance",
+      "immutable-artifact-retention"
+    ],
+    "blockMessage": "Release profile is declared for compatibility but execution must stop before run start in MVP."
+  }
+}

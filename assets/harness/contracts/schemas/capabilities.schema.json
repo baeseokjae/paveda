@@ -1,0 +1,217 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://paveda.dev/schemas/capabilities.schema.json",
+  "title": "Paveda capability schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/capabilityDefinition"
+    },
+    {
+      "$ref": "#/$defs/hostCapabilityEntry"
+    }
+  ],
+  "$defs": {
+    "capabilityId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$"
+    },
+    "evidenceKind": {
+      "type": "string",
+      "enum": [
+        "command",
+        "unit_test",
+        "e2e_test",
+        "integration_test",
+        "coverage",
+        "typecheck",
+        "lint",
+        "build",
+        "semantic_review",
+        "adversarial_review",
+        "risk_review",
+        "security_scan",
+        "screenshot",
+        "trace",
+        "manual_decision",
+        "host_event"
+      ]
+    },
+    "capabilityDefinition": {
+      "type": "object",
+      "required": [
+        "id",
+        "category",
+        "description",
+        "requiredBy",
+        "evidenceKinds",
+        "missingBehavior",
+        "fallbackPolicy"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/capabilityId"
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "host",
+            "lifecycle",
+            "storage",
+            "command",
+            "test",
+            "review",
+            "projection",
+            "learning"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requiredBy": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "evidenceKinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceKind"
+          },
+          "uniqueItems": true
+        },
+        "missingBehavior": {
+          "type": "string",
+          "enum": [
+            "block",
+            "ask_setup_sprint",
+            "not_applicable_allowed"
+          ]
+        },
+        "fallbackPolicy": {
+          "type": "object",
+          "required": [
+            "allowed",
+            "mode",
+            "requiresUserApproval"
+          ],
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "mode": {
+              "type": "string",
+              "enum": [
+                "none",
+                "host_native",
+                "paveda_wrapper",
+                "setup_sprint"
+              ]
+            },
+            "requiresUserApproval": {
+              "type": "boolean"
+            },
+            "metadata": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "extensions": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          },
+          "additionalProperties": false
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "extensions": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "hostCapabilityEntry": {
+      "type": "object",
+      "required": [
+        "id",
+        "support",
+        "confidence",
+        "source",
+        "nativePrimitive",
+        "limitations",
+        "requiresSetup",
+        "setupSprintAllowed"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/capabilityId"
+        },
+        "support": {
+          "type": "string",
+          "enum": [
+            "native",
+            "wrapped",
+            "simulated",
+            "unsupported"
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "manifest",
+            "auto-detected",
+            "default",
+            "user"
+          ]
+        },
+        "nativePrimitive": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "requiresSetup": {
+          "type": "boolean"
+        },
+        "setupSprintAllowed": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "extensions": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    }
+  }
+}

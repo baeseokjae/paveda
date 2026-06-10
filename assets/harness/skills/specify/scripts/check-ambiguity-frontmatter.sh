@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # check-ambiguity-frontmatter.sh
-# Validates that /specify/SKILL.md and /do/SKILL.md contain the required
-# ambiguity-score-gate patch content.
+# Validates that /specify/SKILL.md keeps ambiguity scoring and /do/SKILL.md
+# keeps the Paveda contract-shell obligations.
 # Exit 0 = all PASS, Exit 1 = one or more FAIL
 
 set -uo pipefail
@@ -99,36 +99,35 @@ fi
 
 # ── (B) /do/SKILL.md checks ───────────────────────────────────────────────────
 
-# Section around Phase 1.5 end / Phase 1.6 insertion area
-# Extract from Phase 1.5 header to Phase 2 header
-PHASE15_TO_2=$(awk '/### Phase 1\.5: Interview Gate/{found=1} found{print} /### Phase 2:/{if(found && NR>5){exit}}' "$DO_SKILL" 2>/dev/null || true)
+DO_TEXT=$(cat "$DO_SKILL" 2>/dev/null || true)
 
-# B1: ambiguity_score keyword in Phase 1.5+ gate area (Phase 1.6)
-if echo "$PHASE15_TO_2" | grep -q "ambiguity_score"; then
-  check "B1" "ambiguity_score가 Phase 1.5 직후 게이트 영역에 등장" "pass"
+# B1: contract shell title
+if echo "$DO_TEXT" | grep -q "# /do - Paveda Contract Shell"; then
+  check "B1" "do SKILL.md가 Paveda contract shell 제목을 포함" "pass"
 else
-  check "B1" "ambiguity_score가 Phase 1.5 직후 게이트 영역에 등장" "fail"
+  check "B1" "do SKILL.md가 Paveda contract shell 제목을 포함" "fail"
 fi
 
-# B2: fallback / 필드 누락 text
-if echo "$PHASE15_TO_2" | grep -qE "0\.0 fallback|필드 누락"; then
-  check "B2" "0.0 fallback 또는 필드 누락 하위 호환 처리 텍스트 등장" "pass"
+# B2: host-native primitive preservation
+if echo "$DO_TEXT" | grep -q "Host-Native Execution"; then
+  check "B2" "host-native 실행 원칙이 등장" "pass"
 else
-  check "B2" "0.0 fallback 또는 필드 누락 하위 호환 처리 텍스트 등장" "fail"
+  check "B2" "host-native 실행 원칙이 등장" "fail"
 fi
 
-# B3: 0.2 threshold
-if echo "$PHASE15_TO_2" | grep -qE "0\.2|≤ 0\.2|> 0\.2"; then
-  check "B3" "0.2 게이트 임계값 등장" "pass"
+# B3: projection drift preflight
+if echo "$DO_TEXT" | grep -q "paveda projection status --host <host>"; then
+  check "B3" "projection drift preflight 명령이 등장" "pass"
 else
-  check "B3" "0.2 게이트 임계값 등장" "fail"
+  check "B3" "projection drift preflight 명령이 등장" "fail"
 fi
 
-# B4: AskUserQuestion in gate handling (soft-warn)
-if echo "$PHASE15_TO_2" | grep -q "AskUserQuestion"; then
-  check "B4" "AskUserQuestion이 게이트 처리에 등장 (soft-warn)" "pass"
+# B4: unit/e2e and not_applicable policy
+if echo "$DO_TEXT" | grep -q "Unit evidence is mandatory" && \
+   echo "$DO_TEXT" | grep -q "metadata.classifierReason"; then
+  check "B4" "unit/e2e gate와 audited not_applicable 정책이 등장" "pass"
 else
-  check "B4" "AskUserQuestion이 게이트 처리에 등장 (soft-warn)" "fail"
+  check "B4" "unit/e2e gate와 audited not_applicable 정책이 등장" "fail"
 fi
 
 # ── (C) frontmatter validity ──────────────────────────────────────────────────
@@ -182,19 +181,25 @@ else
   check "C2b" "do SKILL.md의 name 필드 = do 보존 (got: '${DO_NAME}')" "fail"
 fi
 
-# C3: Phase ordering in do/SKILL.md (Phase 1.5 → 1.6 → Phase 2 in order)
-PH15_LINE=$(grep -n "### Phase 1\.5:" "$DO_SKILL" | head -1 | cut -d: -f1 || true)
-PH16_LINE=$(grep -n "### Phase 1\.6:" "$DO_SKILL" | head -1 | cut -d: -f1 || true)
-PH2_LINE=$(grep -n "### Phase 2:" "$DO_SKILL" | head -1 | cut -d: -f1 || true)
-PH15_LINE="${PH15_LINE:-0}"
-PH16_LINE="${PH16_LINE:-0}"
-PH2_LINE="${PH2_LINE:-0}"
+# C3: section ordering in do/SKILL.md
+START_LINE=$(grep -n "## Required Start" "$DO_SKILL" | head -1 | cut -d: -f1 || true)
+RUN_LINE=$(grep -n "## Run Creation" "$DO_SKILL" | head -1 | cut -d: -f1 || true)
+HOST_LINE=$(grep -n "## Host-Native Execution" "$DO_SKILL" | head -1 | cut -d: -f1 || true)
+GATE_LINE=$(grep -n "## Test Gate Rules" "$DO_SKILL" | head -1 | cut -d: -f1 || true)
+VERIFY_LINE=$(grep -n "## Verification" "$DO_SKILL" | head -1 | cut -d: -f1 || true)
+START_LINE="${START_LINE:-0}"
+RUN_LINE="${RUN_LINE:-0}"
+HOST_LINE="${HOST_LINE:-0}"
+GATE_LINE="${GATE_LINE:-0}"
+VERIFY_LINE="${VERIFY_LINE:-0}"
 
-if [ "$PH15_LINE" -gt 0 ] && [ "$PH16_LINE" -gt 0 ] && [ "$PH2_LINE" -gt 0 ] && \
-   [ "$PH15_LINE" -lt "$PH16_LINE" ] && [ "$PH16_LINE" -lt "$PH2_LINE" ]; then
-  check "C3" "do SKILL.md Phase 순서: 1.5 → 1.6 → 2 (순서 보존)" "pass"
+if [ "$START_LINE" -gt 0 ] && [ "$RUN_LINE" -gt 0 ] && [ "$HOST_LINE" -gt 0 ] && \
+   [ "$GATE_LINE" -gt 0 ] && [ "$VERIFY_LINE" -gt 0 ] && \
+   [ "$START_LINE" -lt "$RUN_LINE" ] && [ "$RUN_LINE" -lt "$HOST_LINE" ] && \
+   [ "$HOST_LINE" -lt "$GATE_LINE" ] && [ "$GATE_LINE" -lt "$VERIFY_LINE" ]; then
+  check "C3" "do SKILL.md section 순서: start → run → host-native → gates → verify" "pass"
 else
-  check "C3" "do SKILL.md Phase 1.5(L${PH15_LINE}), 1.6(L${PH16_LINE}), 2(L${PH2_LINE}) 순서 확인" "fail"
+  check "C3" "do SKILL.md section 순서 확인 start(L${START_LINE}) run(L${RUN_LINE}) host(L${HOST_LINE}) gate(L${GATE_LINE}) verify(L${VERIFY_LINE})" "fail"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────

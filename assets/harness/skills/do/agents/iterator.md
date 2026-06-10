@@ -111,7 +111,7 @@ Gap Detector가 taxonomy 분류를 제공한 경우(원인 열에 `[taxonomy-typ
 
 프로젝트 메타데이터(package scripts, Makefile, language-specific config 등)에서
 lint/test/build 또는 동등한 검증 명령을 확인해 실행한다. 존재하지 않는 명령은
-새로 만들지 말고 `SKIP: command unavailable`로 기록한다.
+새로 만들지 말고 Paveda gate 정책에 따른 `not_applicable` 근거 또는 setup-sprint block으로 기록한다.
 
 Self-eval 실패 시 직접 수정하여 재검증. 반복은 최대 3회.
 

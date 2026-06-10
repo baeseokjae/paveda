@@ -29,7 +29,16 @@ import {
 	projectWorkflowState,
 	resolvePolicyRuntimeSource,
 } from "../policy/index.js";
-import type { EventRecord, EventStore, PolicyDecisionRecord } from "../store/index.js";
+import type {
+	EventRecord,
+	EventStore,
+	EvidenceRecord,
+	EvidenceResult,
+	HostEventRecord,
+	PhaseEventRecord,
+	PhaseStatus,
+	PolicyDecisionRecord,
+} from "../store/index.js";
 
 export interface HookDefinition {
 	name: string;
@@ -54,6 +63,7 @@ export interface DispatchHookEventResult {
 	reason?: "disabled";
 	hook: HookDefinition;
 	events: EventRecord[];
+	hostLifecycle?: HostLifecycleCaptureResult;
 	sessionContext?: SessionContext;
 	costGuard?: CostGuardResult;
 	destructiveGuard?: DestructiveGuardResult;
@@ -66,6 +76,33 @@ export interface DispatchHookEventResult {
 	policySource?: PolicyRuntimeSource;
 	policyEvaluation?: PolicyEvaluation;
 	policyDecisions?: PolicyDecisionRecord[];
+}
+
+export interface HostLifecycleCaptureResult {
+	status: "recorded" | "not_applicable";
+	reason?: "missing_run_id" | "missing_run";
+	hostEvent?: HostEventRecord;
+	phaseEvent?: PhaseEventRecord;
+	evidence?: EvidenceRecord;
+}
+
+interface NormalizedHostLifecyclePayload {
+	host?: unknown;
+	runId?: unknown;
+	phaseId?: unknown;
+	eventType?: unknown;
+	normalizedStatus?: unknown;
+	payload?: unknown;
+	evidence?: {
+		evidenceId?: unknown;
+		phaseId?: unknown;
+		kind?: unknown;
+		result?: unknown;
+		command?: unknown;
+		exitCode?: unknown;
+		rationale?: unknown;
+		metadata?: unknown;
+	};
 }
 
 interface SessionConfigResolution {
@@ -227,6 +264,7 @@ export function dispatchHookEvent(
 			}),
 		);
 	}
+	const hostLifecycle = captureHostLifecycle(store, readNormalizedHostLifecycle(payload), ts);
 	let costGuard: CostGuardResult | undefined;
 	let destructiveGuard: DestructiveGuardResult | undefined;
 	let blastCheck: BlastCheckResult | undefined;
@@ -344,6 +382,7 @@ export function dispatchHookEvent(
 		dispatched: true,
 		hook: dispatchedHook,
 		events,
+		hostLifecycle,
 		sessionContext,
 		costGuard,
 		destructiveGuard,
@@ -398,6 +437,151 @@ function matchesPart(selector: string, value: string): boolean {
 
 function matchesHookMatcher(hookMatcher: string, inputMatcher: string): boolean {
 	return hookMatcher === "*" || hookMatcher.split("|").includes(inputMatcher);
+}
+
+function captureHostLifecycle(
+	store: EventStore,
+	lifecycle: NormalizedHostLifecyclePayload | undefined,
+	ts: number,
+): HostLifecycleCaptureResult | undefined {
+	if (!lifecycle) {
+		return undefined;
+	}
+	const runId = readNonEmptyString(lifecycle.runId);
+	if (!runId) {
+		return { status: "not_applicable", reason: "missing_run_id" };
+	}
+	if (!store.getRun(runId)) {
+		return { status: "not_applicable", reason: "missing_run" };
+	}
+	const host = readNonEmptyString(lifecycle.host) ?? "unknown";
+	const phaseId = readNonEmptyString(lifecycle.phaseId) ?? "execute";
+	const eventType = readNonEmptyString(lifecycle.eventType) ?? "host.lifecycle";
+	const normalizedStatus = readNonEmptyString(lifecycle.normalizedStatus);
+	const phaseStatus = toPhaseStatus(normalizedStatus);
+	const payload = lifecycle.payload ?? {};
+	const hostEvent = store.appendHostEvent({
+		runId,
+		host,
+		eventType,
+		normalizedStatus: normalizedStatus ?? null,
+		payload,
+		ts,
+	});
+	const phaseEvent = store.appendPhaseEvent({
+		runId,
+		phaseId,
+		eventType,
+		status: phaseStatus,
+		payload: { host, ...asRecord(payload) },
+		ts,
+	});
+	if (phaseStatus) {
+		const existingPhase = store.getPhase(runId, phaseId);
+		store.upsertPhase({
+			runId,
+			phaseId,
+			status: phaseStatus,
+			startedAt: phaseStatus === "active" ? ts : (existingPhase?.startedAt ?? null),
+			endedAt: phaseStatus === "active" ? (existingPhase?.endedAt ?? null) : ts,
+			hostMapping: { host, eventType },
+		});
+	}
+	const evidence = readNormalizedHostEvidence(lifecycle.evidence, phaseId);
+	return {
+		status: "recorded",
+		hostEvent,
+		phaseEvent,
+		...(evidence
+			? {
+					evidence: store.recordEvidence({
+						runId,
+						phaseId: evidence.phaseId,
+						evidenceId: evidence.evidenceId,
+						kind: evidence.kind,
+						result: evidence.result,
+						command: evidence.command ?? null,
+						exitCode: evidence.exitCode ?? null,
+						rationale: evidence.rationale,
+						metadata: evidence.metadata,
+						ts,
+					}),
+				}
+			: {}),
+	};
+}
+
+function readNormalizedHostLifecycle(payload: unknown): NormalizedHostLifecyclePayload | undefined {
+	if (!isRecord(payload) || !isRecord(payload.hostLifecycle)) {
+		return undefined;
+	}
+	return payload.hostLifecycle;
+}
+
+function readNormalizedHostEvidence(
+	value: NormalizedHostLifecyclePayload["evidence"],
+	defaultPhaseId: string,
+):
+	| {
+			evidenceId: string;
+			phaseId: string;
+			kind: string;
+			result: EvidenceResult;
+			command?: string;
+			exitCode?: number;
+			rationale: string;
+			metadata?: unknown;
+	  }
+	| undefined {
+	if (!value) {
+		return undefined;
+	}
+	const evidenceId = readNonEmptyString(value.evidenceId);
+	const kind = readNonEmptyString(value.kind);
+	const result = parseEvidenceResult(value.result);
+	if (!evidenceId || !kind || !result) {
+		return undefined;
+	}
+	return {
+		evidenceId,
+		phaseId: readNonEmptyString(value.phaseId) ?? defaultPhaseId,
+		kind,
+		result,
+		...(readNonEmptyString(value.command) ? { command: readNonEmptyString(value.command) } : {}),
+		...(typeof value.exitCode === "number" && Number.isInteger(value.exitCode)
+			? { exitCode: value.exitCode }
+			: {}),
+		rationale: readNonEmptyString(value.rationale) ?? "Captured from host lifecycle event.",
+		metadata: value.metadata,
+	};
+}
+
+function parseEvidenceResult(value: unknown): EvidenceResult | undefined {
+	if (
+		value === "pass" ||
+		value === "fail" ||
+		value === "block" ||
+		value === "not_applicable" ||
+		value === "inconclusive"
+	) {
+		return value;
+	}
+	return undefined;
+}
+
+function toPhaseStatus(value: string | undefined): PhaseStatus | null {
+	if (value === "active" || value === "completed" || value === "failed" || value === "blocked") {
+		return value;
+	}
+	return null;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+	return isRecord(value) ? value : {};
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

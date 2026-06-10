@@ -2,10 +2,15 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { fromCodexHookPayload } from "../src/adapters/codex/index.js";
+import {
+	buildCodexGoalHandoff,
+	fromCodexHookPayload,
+	normalizeCodexGoalLifecycleEvent,
+	normalizeCodexGoalStatus,
+} from "../src/adapters/codex/index.js";
 import type { PavedaConfig } from "../src/core/index.js";
 import { dispatchHookEvent } from "../src/hook-runtime/index.js";
-import { EventStore } from "../src/store/index.js";
+import { EventStore, type RunRecord } from "../src/store/index.js";
 
 const tempDirs: string[] = [];
 
@@ -116,6 +121,82 @@ describe("Codex adapter", () => {
 		);
 
 		store.close();
+	});
+
+	it("maps Codex native goal statuses without replacing the native lifecycle", () => {
+		expect(normalizeCodexGoalStatus("created")).toBe("active");
+		expect(normalizeCodexGoalStatus("in_progress")).toBe("active");
+		expect(normalizeCodexGoalStatus("completed")).toBe("completed");
+		expect(normalizeCodexGoalStatus("blocked")).toBe("blocked");
+		expect(normalizeCodexGoalStatus("failed")).toBe("failed");
+	});
+
+	it("normalizes goal progress and terminal lifecycle events", () => {
+		const progress = normalizeCodexGoalLifecycleEvent({
+			runId: "01900000-0000-7000-8000-000000000001",
+			objective: "Refactor policy engine",
+			nativeStatus: "in_progress",
+			plan: [{ step: "verify contract" }],
+			progress: { completedSteps: 1 },
+		});
+		expect(progress).toMatchObject({
+			host: "codex",
+			phaseId: "execute",
+			eventType: "codex.goal.in_progress",
+			normalizedStatus: "active",
+			payload: {
+				objective: "Refactor policy engine",
+				nativeStatus: "in_progress",
+				plan: [{ step: "verify contract" }],
+				progress: { completedSteps: 1 },
+			},
+		});
+
+		const completed = normalizeCodexGoalLifecycleEvent({
+			runId: "01900000-0000-7000-8000-000000000001",
+			nativeStatus: "completed",
+		});
+		expect(completed).toMatchObject({
+			phaseId: "handoff",
+			eventType: "codex.goal.completed",
+			normalizedStatus: "completed",
+		});
+	});
+
+	it("builds a Codex goal handoff from a Paveda run", () => {
+		const run: RunRecord = {
+			runId: "01900000-0000-7000-8000-000000000001",
+			objective: "Implement Codex handoff",
+			acceptanceCriteria: ["goal event", "status mapping"],
+			profile: "strict",
+			host: "codex",
+			status: "active",
+			createdAt: 1_000,
+			updatedAt: 1_000,
+			completedAt: null,
+			context: { taskType: "code" },
+			metadata: null,
+		};
+
+		const handoff = buildCodexGoalHandoff({
+			run,
+			taskType: "code",
+			cwd: "/tmp/paveda-codex",
+		});
+
+		expect(handoff).toMatchObject({
+			status: "native_handoff",
+			primitive: "goal",
+			eventType: "codex.goal.created",
+			normalizedStatus: "active",
+			phaseId: "intake",
+			payload: {
+				objective: "Implement Codex handoff",
+				acceptanceCriteria: ["goal event", "status mapping"],
+				taskType: "code",
+				profile: "strict",
+			},
+		});
 	});
 });
 

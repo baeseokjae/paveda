@@ -7,8 +7,18 @@ import { fromCodexHookPayload } from "./adapters/codex/index.js";
 import { fromHermesHookPayload } from "./adapters/hermes/index.js";
 import { fromPiHookPayload } from "./adapters/pi/index.js";
 import { runProjectChecks } from "./checks/project-checks.js";
+import { runConformance } from "./conformance/index.js";
+import { explainContract, loadHostCapabilities, validateContractSource } from "./contract/index.js";
 import { loadConfig, parseHookProfile } from "./core/index.js";
 import { formatDoctorReport, runDoctor } from "./doctor/index.js";
+import {
+	addRunEvidence,
+	listRunEvidence,
+	runHostCommand,
+	startPavedaDo,
+	summarizeRun,
+	verifyRun,
+} from "./execution/index.js";
 import { assertWritePathIsSafe, writeTextFileSafely } from "./fs-safety.js";
 import { type DispatchHookEventInput, dispatchHookEvent } from "./hook-runtime/index.js";
 import type { ProjectHookExecution } from "./hooks/project-hooks.js";
@@ -23,6 +33,12 @@ import { installClaudeCode } from "./install/claude-code.js";
 import { installCodex } from "./install/codex.js";
 import { installHermes } from "./install/hermes.js";
 import { installPi } from "./install/pi.js";
+import {
+	explainLearningPattern,
+	promoteLearningPattern,
+	proposeLearningPattern,
+	retireLearningPattern,
+} from "./learning/index.js";
 import { serveMcpStdio } from "./mcp/server.js";
 import {
 	type AgentEvent,
@@ -37,6 +53,14 @@ import {
 	summarizePolicyBundle,
 	verifySignedPolicyBundleWithKeyring,
 } from "./policy/index.js";
+import {
+	approveProjectionOverride,
+	checkProjectionStatus,
+	diffProjections,
+	importProjectionDrift,
+	parsePavedaProfile,
+	regenerateProjections,
+} from "./projection/index.js";
 import { recordRouteDecision, routeSkill } from "./router/index.js";
 import {
 	enableSkillRouter,
@@ -50,6 +74,7 @@ import type { LoadSkillsOptions } from "./skill-loader/index.js";
 import type {
 	InstinctScope,
 	InstinctStatus,
+	LearningState,
 	RoutedSkill,
 	RouterDecision,
 	RouterDecisionResult,
@@ -175,6 +200,243 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 		if (args.includes("--write") && !result.doctor.ok) {
 			process.exitCode = 1;
 		}
+		return;
+	}
+
+	if (command === "projection") {
+		const subcommand = requirePositional(args, 0, "projection command");
+		const projectionArgs = args.slice(1);
+		if (subcommand === "status") {
+			const result = checkProjectionStatus({
+				cwd: readOption(projectionArgs, "--cwd"),
+				host: requireOption(projectionArgs, "--host"),
+				path: readOption(projectionArgs, "--path"),
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+
+		if (subcommand === "diff") {
+			const result = diffProjections({
+				cwd: readOption(projectionArgs, "--cwd"),
+				host: requireOption(projectionArgs, "--host"),
+				path: readOption(projectionArgs, "--path"),
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+
+		if (subcommand === "regenerate") {
+			printJson(
+				regenerateProjections({
+					cwd: readOption(projectionArgs, "--cwd"),
+					host: requireOption(projectionArgs, "--host"),
+					profile: parseOptionalPavedaProfile(readOption(projectionArgs, "--profile")),
+					targetRoot: readOption(projectionArgs, "--target-root"),
+					skills: parseOptionalCommaList(readOption(projectionArgs, "--skills")),
+					write: projectionArgs.includes("--write"),
+					force: projectionArgs.includes("--force"),
+				}),
+			);
+			return;
+		}
+
+		if (subcommand === "import") {
+			printJson(
+				importProjectionDrift({
+					cwd: readOption(projectionArgs, "--cwd"),
+					host: requireOption(projectionArgs, "--host"),
+					profile: parseOptionalPavedaProfile(readOption(projectionArgs, "--profile")),
+					path: requireOption(projectionArgs, "--path"),
+					reason: readOption(projectionArgs, "--reason"),
+					write: projectionArgs.includes("--write"),
+				}),
+			);
+			return;
+		}
+
+		if (subcommand === "approve-override") {
+			printJson(
+				approveProjectionOverride({
+					cwd: readOption(projectionArgs, "--cwd"),
+					host: requireOption(projectionArgs, "--host"),
+					profile: parseOptionalPavedaProfile(readOption(projectionArgs, "--profile")),
+					path: requireOption(projectionArgs, "--path"),
+					reason: requireOption(projectionArgs, "--reason"),
+					actor: readOption(projectionArgs, "--actor"),
+					scope: readOption(projectionArgs, "--scope"),
+					expiresAt: requireOption(projectionArgs, "--expires-at"),
+					compensatingControl: readOption(projectionArgs, "--compensating-control"),
+					write: projectionArgs.includes("--write"),
+					dbPath: readOption(projectionArgs, "--db"),
+					storeScope: parseStoreScope(readOption(projectionArgs, "--store-scope")),
+				}),
+			);
+			return;
+		}
+
+		throw new Error(`Unknown projection command: ${subcommand}`);
+	}
+
+	if (command === "contract") {
+		const subcommand = requirePositional(args, 0, "contract command");
+		const contractArgs = args.slice(1);
+		if (subcommand === "validate") {
+			const result = validateContractSource({
+				cwd: readOption(contractArgs, "--cwd"),
+				host: readOption(contractArgs, "--host"),
+				profile: parseOptionalPavedaProfile(readOption(contractArgs, "--profile")),
+				includeProjection: !contractArgs.includes("--source-only"),
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+		if (subcommand === "explain") {
+			printJson(
+				explainContract({
+					cwd: readOption(contractArgs, "--cwd"),
+					profile: parseOptionalPavedaProfile(readOption(contractArgs, "--profile")),
+				}),
+			);
+			return;
+		}
+		throw new Error(`Unknown contract command: ${subcommand}`);
+	}
+
+	if (command === "capabilities") {
+		printJson(
+			loadHostCapabilities({
+				cwd: readOption(args, "--cwd"),
+				host: requireOption(args, "--host"),
+			}),
+		);
+		return;
+	}
+
+	if (command === "conformance") {
+		const result = runConformance({
+			cwd: readOption(args, "--cwd"),
+			host: requireOption(args, "--host"),
+			profile: parseOptionalPavedaProfile(readOption(args, "--profile")),
+			keepArtifacts: args.includes("--keep-artifacts"),
+		});
+		printJson(result);
+		if (!result.ok) {
+			process.exitCode = 1;
+		}
+		return;
+	}
+
+	if (command === "do") {
+		const objective = readDoObjective(args);
+		const result = startPavedaDo({
+			cwd: readOption(args, "--cwd"),
+			host: readOption(args, "--host"),
+			profile: parseOptionalPavedaProfile(readOption(args, "--profile")),
+			objective,
+			taskType: readOption(args, "--task-type"),
+			acceptanceCriteria: parseOptionalCommaList(readOption(args, "--acceptance")),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+		});
+		printJson(result);
+		return;
+	}
+
+	if (command === "run") {
+		const separatorIndex = args.indexOf("--");
+		if (separatorIndex === -1) {
+			throw new Error("Missing native command separator: --");
+		}
+		const runArgs = args.slice(0, separatorIndex);
+		const nativeArgs = args.slice(separatorIndex + 1);
+		const result = runHostCommand({
+			cwd: readOption(runArgs, "--cwd"),
+			host: requirePositional(runArgs, 0, "host"),
+			profile: parseOptionalPavedaProfile(readOption(runArgs, "--profile")),
+			objective: readOption(runArgs, "--objective"),
+			taskType: readOption(runArgs, "--task-type"),
+			acceptanceCriteria: parseOptionalCommaList(readOption(runArgs, "--acceptance")),
+			nativeArgs,
+			dbPath: readOption(runArgs, "--db"),
+			storeScope: parseStoreScope(readOption(runArgs, "--store-scope")),
+		});
+		printJson(result);
+		if (result.exitCode !== 0) {
+			process.exitCode = result.exitCode;
+		}
+		return;
+	}
+
+	if (command === "verify") {
+		const result = verifyRun({
+			cwd: readOption(args, "--cwd"),
+			runId: requireOption(args, "--run"),
+			profile: parseOptionalPavedaProfile(readOption(args, "--profile")),
+			write: args.includes("--write"),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+		});
+		printJson(result);
+		if (!result.ok) {
+			process.exitCode = 1;
+		}
+		return;
+	}
+
+	if (command === "evidence") {
+		if (args[0] === "add") {
+			const evidenceArgs = args.slice(1);
+			printJson(
+				addRunEvidence({
+					cwd: readOption(evidenceArgs, "--cwd"),
+					runId: requireOption(evidenceArgs, "--run"),
+					phaseId: readOption(evidenceArgs, "--phase"),
+					evidenceId: requireOption(evidenceArgs, "--id"),
+					kind: requireOption(evidenceArgs, "--kind"),
+					result: requireOption(evidenceArgs, "--result"),
+					command: readOption(evidenceArgs, "--command"),
+					exitCode: parseOptionalInteger(readOption(evidenceArgs, "--exit-code"), "--exit-code"),
+					rationale: readOption(evidenceArgs, "--rationale"),
+					metadata: parseOptionalJson(
+						readOption(evidenceArgs, "--metadata-json"),
+						"--metadata-json",
+					),
+					dbPath: readOption(evidenceArgs, "--db"),
+					storeScope: parseStoreScope(readOption(evidenceArgs, "--store-scope")),
+				}),
+			);
+			return;
+		}
+		printJson(
+			listRunEvidence({
+				cwd: readOption(args, "--cwd"),
+				runId: requireOption(args, "--run"),
+				dbPath: readOption(args, "--db"),
+				storeScope: parseStoreScope(readOption(args, "--store-scope")),
+			}),
+		);
+		return;
+	}
+
+	if (command === "status" && args.includes("--run")) {
+		printJson(
+			summarizeRun({
+				cwd: readOption(args, "--cwd"),
+				runId: requireOption(args, "--run"),
+				dbPath: readOption(args, "--db"),
+				storeScope: parseStoreScope(readOption(args, "--store-scope")),
+			}),
+		);
 		return;
 	}
 
@@ -556,6 +818,79 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			throw new Error(`Unknown instincts command: ${subcommand}`);
 		}
 
+		if (command === "learning") {
+			const subcommand = readLearningSubcommand(args);
+			if (subcommand === "list") {
+				printJson(
+					store.listLearningPatterns({
+						runId: readOption(args, "--run"),
+						scope: parseOptionalLearningScope(readOption(args, "--scope")),
+						state: parseOptionalLearningState(readOption(args, "--state")),
+						limit: parseOptionalPositiveInteger(readOption(args, "--limit"), "--limit"),
+					}),
+				);
+				return;
+			}
+
+			if (subcommand === "propose") {
+				printJson(
+					proposeLearningPattern({
+						store,
+						runId: requireOption(args, "--run"),
+						scope: parseOptionalLearningScope(readOption(args, "--scope")),
+						state: parseOptionalLearningState(readOption(args, "--state")),
+						pattern: requireOption(args, "--pattern"),
+						confidence: parseLearningConfidence(readOption(args, "--confidence")),
+						evidenceId: parseOptionalPositiveInteger(
+							readOption(args, "--evidence-id"),
+							"--evidence-id",
+						),
+						metadata: parseOptionalJson(readOption(args, "--metadata-json"), "--metadata-json"),
+					}),
+				);
+				return;
+			}
+
+			if (subcommand === "promote") {
+				printJson(
+					promoteLearningPattern({
+						store,
+						cwd,
+						id: parseRequiredPositiveInteger(readOption(args, "--id"), "--id"),
+						approvedBy: requireOption(args, "--approved-by"),
+						write: args.includes("--write"),
+					}),
+				);
+				return;
+			}
+
+			if (subcommand === "retire") {
+				printJson(
+					retireLearningPattern({
+						store,
+						cwd,
+						id: parseRequiredPositiveInteger(readOption(args, "--id"), "--id"),
+						reason: requireOption(args, "--reason"),
+						write: args.includes("--write"),
+					}),
+				);
+				return;
+			}
+
+			if (subcommand === "explain") {
+				printJson(
+					explainLearningPattern({
+						store,
+						cwd,
+						id: parseRequiredPositiveInteger(readOption(args, "--id"), "--id"),
+					}),
+				);
+				return;
+			}
+
+			throw new Error(`Unknown learning command: ${subcommand}`);
+		}
+
 		if (command === "route") {
 			const sessionId = readOption(args, "--session");
 			const result = parseOptionalRouterResult(readOption(args, "--result"));
@@ -621,6 +956,7 @@ function isStoreBackedCommand(command: string): boolean {
 		command === "router-trace" ||
 		command === "export-decisions" ||
 		command === "instincts" ||
+		command === "learning" ||
 		command === "route" ||
 		command === "hook"
 	);
@@ -682,6 +1018,42 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 			return;
 		}
 		throw new Error(`Unknown instincts command: ${subcommand}`);
+	}
+
+	if (command === "learning") {
+		const subcommand = readLearningSubcommand(args);
+		if (subcommand === "list") {
+			readOption(args, "--run");
+			parseOptionalLearningScope(readOption(args, "--scope"));
+			parseOptionalLearningState(readOption(args, "--state"));
+			parseOptionalPositiveInteger(readOption(args, "--limit"), "--limit");
+			return;
+		}
+		if (subcommand === "propose") {
+			requireOption(args, "--run");
+			requireOption(args, "--pattern");
+			parseLearningConfidence(readOption(args, "--confidence"));
+			parseOptionalLearningScope(readOption(args, "--scope"));
+			parseOptionalLearningState(readOption(args, "--state"));
+			parseOptionalPositiveInteger(readOption(args, "--evidence-id"), "--evidence-id");
+			parseOptionalJson(readOption(args, "--metadata-json"), "--metadata-json");
+			return;
+		}
+		if (subcommand === "promote") {
+			parseRequiredPositiveInteger(readOption(args, "--id"), "--id");
+			requireOption(args, "--approved-by");
+			return;
+		}
+		if (subcommand === "retire") {
+			parseRequiredPositiveInteger(readOption(args, "--id"), "--id");
+			requireOption(args, "--reason");
+			return;
+		}
+		if (subcommand === "explain") {
+			parseRequiredPositiveInteger(readOption(args, "--id"), "--id");
+			return;
+		}
+		throw new Error(`Unknown learning command: ${subcommand}`);
 	}
 
 	if (command === "route") {
@@ -767,6 +1139,10 @@ function parseOptionalHookProfile(value: string | undefined) {
 	return value ? parseHookProfile(value) : undefined;
 }
 
+function parseOptionalPavedaProfile(value: string | undefined) {
+	return value ? parsePavedaProfile(value) : undefined;
+}
+
 function parseOptionalProjectHooks(args: string[]): boolean | undefined {
 	if (args.includes("--project-hooks")) {
 		return true;
@@ -817,7 +1193,28 @@ function readSkillLoadOptions(args: string[]): LoadSkillsOptions {
 	};
 }
 
+function readDoObjective(args: string[]): string {
+	const objective = readPositional(args, 0, [
+		"--cwd",
+		"--host",
+		"--profile",
+		"--task-type",
+		"--acceptance",
+		"--db",
+		"--store-scope",
+	]);
+	if (!objective) {
+		throw new Error("Missing required task objective");
+	}
+	return objective;
+}
+
 function readInstinctsSubcommand(args: string[]): string {
+	const candidate = args[0];
+	return !candidate || candidate.startsWith("--") ? "list" : candidate;
+}
+
+function readLearningSubcommand(args: string[]): string {
 	const candidate = args[0];
 	return !candidate || candidate.startsWith("--") ? "list" : candidate;
 }
@@ -870,6 +1267,19 @@ function parseOptionalNonNegativeInteger(
 	return parsed;
 }
 
+function parseOptionalInteger(value: string | undefined, name: string): number | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+
+	const parsed = Number(value);
+	if (!Number.isInteger(parsed)) {
+		throw new Error(`${name} must be an integer`);
+	}
+
+	return parsed;
+}
+
 function parseOptionalNumber(value: string | undefined, name: string): number | undefined {
 	if (value === undefined) {
 		return undefined;
@@ -893,6 +1303,15 @@ function parseRequiredNumber(value: string | undefined, name: string): number {
 }
 
 function parseInstinctConfidence(value: string | undefined): number {
+	const parsed = parseRequiredNumber(value, "--confidence");
+	if (parsed < 0 || parsed > 1) {
+		throw new Error("--confidence must be between 0 and 1");
+	}
+
+	return parsed;
+}
+
+function parseLearningConfidence(value: string | undefined): number {
 	const parsed = parseRequiredNumber(value, "--confidence");
 	if (parsed < 0 || parsed > 1) {
 		throw new Error("--confidence must be between 0 and 1");
@@ -955,6 +1374,34 @@ function parseInstinctStatus(value: string): InstinctStatus {
 	}
 
 	throw new Error(`Invalid instinct status: ${value}`);
+}
+
+function parseOptionalLearningScope(
+	value: string | undefined,
+): InstinctScope | "shared" | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (value === "project" || value === "user" || value === "shared") {
+		return value;
+	}
+	throw new Error(`Invalid learning scope: ${value}`);
+}
+
+function parseOptionalLearningState(value: string | undefined): LearningState | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (
+		value === "observed" ||
+		value === "candidate" ||
+		value === "validated" ||
+		value === "promoted" ||
+		value === "retired"
+	) {
+		return value;
+	}
+	throw new Error(`Invalid learning state: ${value}`);
 }
 
 function parseStoreScope(value: string | undefined): StoreScope {
@@ -1701,6 +2148,21 @@ Hosts:
 
 Common flow:
   init --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--include-optional] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write] [--force]
+  contract validate [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--profile fast|standard|strict|release] [--source-only]
+  contract explain [--cwd path] [--profile fast|standard|strict|release]
+  do [--host claude-code|codex|pi|hermes] [--profile fast|standard|strict|release] [--task-type code|ui|api|data|infra|test|docs|metadata|mixed] [--acceptance a,b] [--cwd path] [--db path] [--store-scope project|user] "task objective"
+  run <host> [--profile fast|standard|strict|release] [--objective text] [--task-type command|code|ui|api|data|infra|test|docs|metadata|mixed] [--acceptance a,b] [--cwd path] [--db path] [--store-scope project|user] -- <native command...>
+  verify --run uuid-v7 [--profile fast|standard|strict|release] [--cwd path] [--write] [--db path] [--store-scope project|user]
+  status --run uuid-v7 [--cwd path] [--db path] [--store-scope project|user]
+  evidence --run uuid-v7 [--cwd path] [--db path] [--store-scope project|user]
+  evidence add --run uuid-v7 --id id --kind unit_test|e2e_test|command|... --result pass|fail|block|not_applicable|inconclusive [--phase phase] [--command text] [--exit-code n] [--rationale text] [--metadata-json json] [--cwd path] [--db path] [--store-scope project|user]
+  projection status --host harness|claude-code|codex|pi|hermes [--cwd path] [--path file]
+  projection diff --host harness|claude-code|codex|pi|hermes [--cwd path] [--path file]
+  projection regenerate --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--profile fast|standard|strict|release] [--write] [--force]
+  projection import --host harness|claude-code|codex|pi|hermes --path file [--cwd path] [--profile fast|standard|strict|release] [--reason text] [--write]
+  projection approve-override --host harness|claude-code|codex|pi|hermes --path file --reason text --expires-at ISO [--actor name] [--scope project] [--compensating-control text] [--cwd path] [--profile fast|standard|strict|release] [--db path] [--store-scope project|user] [--write]
+  capabilities --host harness|claude-code|codex|pi|hermes [--cwd path]
+  conformance --host claude-code|codex|pi|hermes [--profile fast|standard|strict] [--cwd path] [--keep-artifacts]
   adoption-report --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--policy-cache path] [--runtime-smoke] [--db path] [--store-scope project|user] [--session id] [--json]
   doctor [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--policy-cache path] [--enforcement] [--json]
   mcp serve [--cwd path] [--db path] [--store-scope project|user] [--session id]
@@ -1731,6 +2193,11 @@ Runtime and reports:
   instincts [list] [--scope project|user] [--status pending|active|promoted|expired] [--include-expired] [--limit n] [--db path] [--store-scope project|user]
   instincts add --scope project|user --pattern text --confidence n [--evidence text] [--examples-json json] [--ttl-expires-at epoch-ms] [--status pending|active|promoted|expired] [--db path] [--store-scope project|user]
   instincts set-status --id n --status pending|active|promoted|expired [--db path] [--store-scope project|user]
+  learning [list] [--run uuid-v7] [--scope project|user|shared] [--state observed|candidate|validated|promoted|retired] [--limit n] [--cwd path] [--db path] [--store-scope project|user]
+  learning propose --run uuid-v7 --pattern text --confidence n [--scope project|user|shared] [--state observed|candidate|validated] [--evidence-id n] [--metadata-json json] [--cwd path] [--db path] [--store-scope project|user]
+  learning explain --id n [--cwd path] [--db path] [--store-scope project|user]
+  learning promote --id n --approved-by name [--write] [--cwd path] [--db path] [--store-scope project|user]
+  learning retire --id n --reason text [--write] [--cwd path] [--db path] [--store-scope project|user]
   hook claude-code|codex|hermes|pi [--cwd path] [--db path] [--store-scope project|user] < payload.json
 
 Project utilities:

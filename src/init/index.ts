@@ -12,6 +12,14 @@ import {
 	assertClaudeCodeSettingsPathIsSafe,
 	installClaudeCode,
 } from "../install/claude-code.js";
+import {
+	type PavedaSourceLayoutResult,
+	type ProjectionIndex,
+	type ProjectionStatusResult,
+	checkProjectionStatus,
+	recordProjectionIndex,
+	writePavedaSourceLayout,
+} from "../projection/index.js";
 
 export interface InitOptions {
 	cwd?: string;
@@ -36,9 +44,16 @@ export interface InitResult {
 	written: boolean;
 	force: boolean;
 	bundle: InstallHostSkillBundleResult;
+	paveda: InitPavedaResult;
 	claudeCode?: InstallClaudeCodeResult;
 	doctor: DoctorResult;
 	nextCommands: InitNextCommand[];
+}
+
+export interface InitPavedaResult {
+	source: PavedaSourceLayoutResult;
+	projections: ProjectionIndex;
+	projectionStatus: ProjectionStatusResult;
 }
 
 export interface InitNextCommand {
@@ -93,6 +108,19 @@ export function initializePaveda(options: InitOptions): InitResult {
 					write: options.write,
 				})
 			: undefined;
+	const source = writePavedaSourceLayout({
+		cwd,
+		host,
+		profile: "strict",
+		write: Boolean(options.write),
+	});
+	const projections = recordProjectionIndex({
+		cwd,
+		host,
+		bundle,
+		write: Boolean(options.write),
+	});
+	const projectionStatus = checkProjectionStatus({ cwd, host });
 	const doctor = runDoctor({
 		cwd,
 		host,
@@ -108,6 +136,11 @@ export function initializePaveda(options: InitOptions): InitResult {
 		written: write,
 		force,
 		bundle,
+		paveda: {
+			source,
+			projections,
+			projectionStatus,
+		},
 		...(claudeCode ? { claudeCode } : {}),
 		doctor,
 		nextCommands: buildNextCommands({
@@ -169,6 +202,11 @@ function buildNextCommands(input: BuildNextCommandsInput): InitNextCommand[] {
 			name: "doctor",
 			command: `${cli} doctor --host ${input.host} --cwd ${cwd}${targetRootArg}`,
 			description: "Verify host bundle files, routed /do metadata, and host-specific settings.",
+		},
+		{
+			name: "projection-status",
+			command: `${cli} projection status --host ${input.host} --cwd ${cwd}`,
+			description: "Verify generated projections still match the Paveda projection index.",
 		},
 		{
 			name: "skills-status",

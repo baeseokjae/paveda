@@ -35,7 +35,7 @@
 			"name": "do",
 			"router": true,
 			"path": "skills/do",
-			"notes": "PDCA implementation orchestrator with agents, personas, stagnation detectors, templates, and eval fixtures."
+			"notes": "Host-native implementation contract shell that enforces Paveda run, projection, evidence, unit, e2e, score, and handoff obligations."
 		},
 		{
 			"name": "specify",
@@ -50,7 +50,7 @@
 		{
 			"name": "verify",
 			"path": "skills/verify",
-			"notes": "Verification checklist and command runner guidance."
+			"notes": "Profile-driven verification ladder for required gates, evidence, not_applicable policy, score thresholds, and policy violations."
 		},
 		{
 			"name": "debug",

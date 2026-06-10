@@ -125,7 +125,7 @@ T0 테스트 + AFFECTED_TESTS 포함 **전체 테스트 스위트** 실행.
 
 프로젝트 메타데이터(package scripts, Makefile, language-specific config 등)에서
 lint/test/build 또는 동등한 검증 명령을 확인해 실행한다. 존재하지 않는 명령은
-새로 만들지 말고 `SKIP: command unavailable`로 기록한다.
+새로 만들지 말고 Paveda gate 정책에 따른 `not_applicable` 근거 또는 setup-sprint block으로 기록한다.
 
 추가 자체 검증:
 - [ ] SPRINT_SPEC의 모든 태스크가 구현되었는가?

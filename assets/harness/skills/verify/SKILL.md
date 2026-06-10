@@ -1,128 +1,122 @@
 ---
 name: verify
-description: "AGENTS.md Verification Checklist를 자동 실행. lint, test, build + 테스트 커버리지 확인. 코드 변경 후 품질 검증이 필요할 때 사용."
-argument-hint: "[--quick]"
+description: "Evaluate a Paveda run against the active profile's verification ladder, required gates, evidence, score thresholds, and not_applicable policy."
+argument-hint: "--run <uuid-v7> [--profile fast|standard|strict|release] [--write]"
 allowed-tools: Bash, Glob, Grep, Read
 ---
 
-# /verify — Automated Verification
+# /verify - Paveda Verification Ladder
 
-AGENTS.md의 Verification Checklist를 자동 실행한다. 변경된 파일을 감지하고, lint → test → build → 커버리지 확인을 순차 실행하여 pass/fail을 판정한다.
+Use `/verify` to decide whether a Paveda run can finish.
+The authoritative machine inputs are the `.paveda` contract source and the active profile manifest.
+Host-native commands may produce evidence, but Paveda decides pass/block from the profile manifest and ledger.
 
 ## Usage
 
+```bash
+paveda verify --run <run_id> --profile strict --cwd "$PROJECT_ROOT"
+paveda verify --run <run_id> --profile strict --cwd "$PROJECT_ROOT" --write
 ```
-/verify              # 전체 체크리스트 (lint + test + build + 커버리지)
-/verify --quick      # 빠른 검증 (lint + test만, build 스킵)
-```
+
+`--write` records `verification_score` and blocking policy violations in the ledger.
 
 ## Execution Order
 
-### Phase 1: Parse Arguments
+### 1. Load Contract State
 
-1. `$ARGUMENTS`에서 `--quick` 플래그 확인 → QUICK_MODE 설정
-2. 잘못된 인수가 있으면 usage 안내 후 중단
+1. Resolve project root.
+2. Load the `.paveda` manifest, contract source, active profile manifest, and run ledger.
+3. If the requested profile is `release`, stop with `not_supported_in_mvp`; do not downgrade.
+4. Validate generated projections before trusting host-specific files.
 
-### Phase 2: Collect Changed Files
+### 2. Read Run Context
 
-변경된 파일 목록을 수집한다:
+Read the run's objective, host, profile, task type, acceptance criteria, phase events, artifacts, scores, decisions, and evidence.
+Task type controls which required gates apply.
 
-```bash
-# staged + unstaged 변경 파일
-git diff --name-only HEAD 2>/dev/null || git diff --name-only
-# untracked 파일
-git ls-files --others --exclude-standard
+Code-changing task types:
+
+- `code`
+- `ui`
+- `api`
+- `data`
+- `infra`
+- `test`
+- `mixed`
+
+Non-testable task types:
+
+- `docs`
+- `metadata`
+
+### 3. Evaluate Required Gates
+
+For each `requiredGates[]` entry whose `requiredForTaskTypes[]` contains the run task type:
+
+1. Find ledger evidence by `evidenceKind`.
+2. `pass` evidence satisfies the gate.
+3. `fail`, `block`, or `inconclusive` evidence blocks the gate.
+4. Missing evidence blocks the gate.
+5. `not_applicable` evidence satisfies the gate only when all conditions are true:
+   - the gate allows `not_applicable`
+   - the profile allows `not_applicable` for the task type
+   - the evidence includes rationale when required
+   - the evidence includes `metadata.classifierReason` when required
+   - the evidence includes `metadata.userApproval: true` or `metadata.approvedBy`
+
+For code-changing tasks, unit and e2e gates must not use `not_applicable`.
+Missing unit/e2e infrastructure blocks and should trigger a setup-sprint decision.
+
+### 4. Build Verification Ladder
+
+Report every evidence kind from `verificationLadder[]`.
+Each ladder step is one of:
+
+- `pass`: all required gates for that evidence kind passed
+- `not_applicable`: required gates are explicitly and validly not applicable
+- `block`: one or more required gates failed, are inconclusive, are missing, or have invalid not-applicable evidence
+- `not_required`: evidence kind is listed or recorded but has no required gate for this task type
+
+The default strict ladder is:
+
+1. command
+2. unit_test
+3. e2e_test
+4. semantic_review
+5. adversarial_review
+6. risk_review
+7. security_scan
+8. manual_decision
+9. host_event
+10. typecheck
+11. lint
+12. build
+13. coverage
+
+### 5. Score
+
+Compute `verification_score` from required gates:
+
+```text
+(passed gates + valid not_applicable gates) / required gates
 ```
 
-결과를 CHANGED_FILES에 저장. 변경 없으면 "변경 사항 없음" 보고 후 계속 진행.
+The run passes only when:
 
-### Phase 3: Resolve Project Commands
+- every required gate is `pass` or valid `not_applicable`
+- `verification_score >= profile.scoreThresholds[verification_score].pass`
 
-현재 repo의 package manager metadata와 manifest scripts를 기준으로 명령을 정한다.
-명령이 없으면 해당 항목은 `skipped`로 기록하고, 새 설정 파일이나 script를 만들지 않는다.
+Strict profile requires a perfect score of `1`.
 
-```bash
-PKG_MANAGER="pnpm"
-PACKAGE_MANAGER_FIELD=""
-if [ -f package.json ]; then
-  PACKAGE_MANAGER_FIELD=$(node -e "const p=require('./package.json'); console.log(p.packageManager || '')" 2>/dev/null || true)
-fi
-case "$PACKAGE_MANAGER_FIELD" in
-  npm@*) PKG_MANAGER="npm" ;;
-  yarn@*) PKG_MANAGER="yarn" ;;
-  pnpm@*) PKG_MANAGER="pnpm" ;;
-esac
-[ -f pnpm-lock.yaml ] && PKG_MANAGER="pnpm"
-[ -f package-lock.json ] && PKG_MANAGER="npm"
-[ -f yarn.lock ] && PKG_MANAGER="yarn"
-```
+### 6. Output
 
-### Phase 4: Lint
+Return:
 
-```bash
-[ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts?.lint ? 0 : 1)" && ${PKG_MANAGER} lint
-```
+- `ok`
+- `gates[]`
+- `ladder[]`
+- `scoreSummary`
+- `score` when `--write` is used
+- `policyViolations[]` when `--write` is used and gates block
 
-- 통과 → LINT_RESULT = "pass"
-- 실패 → LINT_RESULT = "fail", 에러 내용 기록
-- script 없음 → LINT_RESULT = "skipped"
-
-### Phase 5: Test
-
-```bash
-[ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts?.test ? 0 : 1)" && ${PKG_MANAGER} test
-```
-
-- 통과 → TEST_RESULT = "pass"
-- 실패 → TEST_RESULT = "fail", 실패한 테스트 목록 기록
-- script 없음 → TEST_RESULT = "skipped"
-
-### Phase 6: Build (--quick 시 스킵)
-
-QUICK_MODE가 아닌 경우에만 실행:
-
-```bash
-[ -f package.json ] && node -e "const p=require('./package.json'); process.exit(p.scripts?.build ? 0 : 1)" && ${PKG_MANAGER} build
-```
-
-- 통과 → BUILD_RESULT = "pass"
-- 실패 → BUILD_RESULT = "fail", 에러 내용 기록
-- QUICK_MODE 또는 script 없음 → BUILD_RESULT = "skipped"
-
-### Phase 7: Test Coverage Check
-
-CHANGED_FILES 중 source file로 보이는 파일에 대해:
-
-1. Glob으로 대응하는 테스트 파일 존재 여부 확인:
-   - 같은 디렉터리의 `*.test.*` 또는 `*.spec.*`
-   - repo-level `tests/`, `test/`, `__tests__/`, 언어별 test 디렉터리
-2. 테스트 파일이 없는 소스 파일 목록을 UNCOVERED_FILES에 기록
-3. 타입/선언 파일, 설정 파일, 생성 파일은 제외
-
-### Phase 8: Report
-
-결과를 테이블로 출력:
-
-```
-## Verification Results
-
-| Check | Result |
-|-------|--------|
-| Lint | ✅ pass |
-| Test | ✅ pass |
-| Build | pass/skipped/fail |
-| Coverage | ⚠️ 2 files without tests |
-
-### 전체 판정: ✅ PASS (또는 ❌ FAIL)
-```
-
-FAIL 판정 기준:
-- Lint, Test, Build 중 하나라도 fail
-- 모든 verification command가 skipped이면 WARN으로 보고하고 사용 가능한 검증 명령을 제안
-
-Coverage 미충족은 경고(⚠️)로만 표시 — FAIL 판정에 포함하지 않음.
-
-## $ARGUMENTS
-
-- (none): 전체 체크리스트 실행
-- `--quick`: lint + test만 (build 스킵)
+If `ok` is false, do not hand off as complete. Repair the blocked gate or run an approved setup sprint first.

@@ -1,0 +1,178 @@
+{
+  "profile": "standard",
+  "schemaVersion": "1.0.0",
+  "contractVersion": "1.0.0",
+  "minimumPavedaVersion": "0.1.0",
+  "description": "Default project profile for normal development tasks with direct unit evidence and broad mechanical checks.",
+  "extends": "fast",
+  "scoreThresholds": [
+    {
+      "metric": "ambiguity_score",
+      "pass": 0.25,
+      "warn": 0.18,
+      "block": 0.35,
+      "repairTrigger": 0.25,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "plan_quality_score",
+      "pass": 0.8,
+      "warn": 0.88,
+      "block": 0.6,
+      "repairTrigger": 0.78,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "progress_score",
+      "pass": 0.78,
+      "warn": 0.86,
+      "block": 0.55,
+      "repairTrigger": 0.75,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "match_score",
+      "pass": 0.85,
+      "warn": 0.9,
+      "block": 0.7,
+      "repairTrigger": 0.82,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "verification_score",
+      "pass": 0.8,
+      "warn": 0.9,
+      "block": 0.65,
+      "repairTrigger": 0.78,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "risk_score",
+      "pass": 0.35,
+      "warn": 0.25,
+      "block": 0.5,
+      "repairTrigger": 0.35,
+      "overrideAllowed": true
+    }
+  ],
+  "requiredGates": [
+    {
+      "id": "unit-gate",
+      "phase": "unit-test",
+      "evidenceKind": "unit_test",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "task changes executable behavior",
+      "capability": "test.unit",
+      "missingCapabilityBehavior": "ask_setup_sprint",
+      "notApplicablePolicy": {
+        "allowed": true,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "typecheck-gate",
+      "phase": "unit-test",
+      "evidenceKind": "typecheck",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "mixed"
+      ],
+      "conditionalWhen": "project has a typecheck command",
+      "capability": "command.run",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "lint-gate",
+      "phase": "unit-test",
+      "evidenceKind": "lint",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "mixed"
+      ],
+      "conditionalWhen": "project has a lint command",
+      "capability": "command.run",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    }
+  ],
+  "verificationLadder": [
+    "command",
+    "unit_test",
+    "typecheck",
+    "lint",
+    "semantic_review",
+    "risk_review"
+  ],
+  "overridePolicy": {
+    "allowedModes": [
+      "approve-override",
+      "import",
+      "regenerate"
+    ],
+    "auditRequired": true,
+    "releaseForbidden": [
+      "unit-gate",
+      "e2e-gate",
+      "coverage-gate",
+      "semantic-gate",
+      "risk-gate"
+    ],
+    "expiryRequired": true
+  },
+  "notApplicablePolicy": {
+    "allowedTaskTypes": [
+      "docs",
+      "metadata"
+    ],
+    "requiresRationale": true,
+    "requiresClassifierReason": true,
+    "ambiguousBehavior": "ask_user"
+  },
+  "releaseSupport": {
+    "status": "supported",
+    "suggestedProfile": "standard",
+    "unimplementedGates": []
+  }
+}
