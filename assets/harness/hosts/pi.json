@@ -1,0 +1,173 @@
+{
+  "host": "pi",
+  "schemaVersion": "1.0.0",
+  "declarationVersion": "1.0.0",
+  "minimumPavedaVersion": "0.1.0",
+  "displayName": "Pi",
+  "supportLevel": "shallow",
+  "versionConstraints": {
+    "detectedVersionRange": null,
+    "minimumHostVersion": null
+  },
+  "capabilities": [
+    {
+      "id": "wrapper.lifecycle",
+      "support": "wrapped",
+      "confidence": 0.75,
+      "source": "manifest",
+      "nativePrimitive": "paveda run",
+      "limitations": [
+        "native lifecycle details are not deeply integrated"
+      ],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "ledger.write",
+      "support": "wrapped",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "paveda ledger writer",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "artifact.write",
+      "support": "wrapped",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "paveda artifact writer",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "command.run",
+      "support": "wrapped",
+      "confidence": 0.8,
+      "source": "manifest",
+      "nativePrimitive": "wrapped command",
+      "limitations": [
+        "requires explicit command invocation"
+      ],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "test.unit",
+      "support": "wrapped",
+      "confidence": 0.65,
+      "source": "manifest",
+      "nativePrimitive": "project test command",
+      "limitations": [
+        "requires project manifest or auto-detection"
+      ],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
+    {
+      "id": "test.e2e",
+      "support": "wrapped",
+      "confidence": 0.6,
+      "source": "manifest",
+      "nativePrimitive": "project e2e command",
+      "limitations": [
+        "requires project manifest or auto-detection"
+      ],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
+    {
+      "id": "projection.write",
+      "support": "wrapped",
+      "confidence": 0.9,
+      "source": "manifest",
+      "nativePrimitive": "paveda projection regenerate",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "projection.drift",
+      "support": "wrapped",
+      "confidence": 0.9,
+      "source": "manifest",
+      "nativePrimitive": "paveda projection diff",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "learning.propose",
+      "support": "wrapped",
+      "confidence": 0.6,
+      "source": "manifest",
+      "nativePrimitive": "paveda learning propose",
+      "limitations": [
+        "promotion requires explicit user approval"
+      ],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    }
+  ],
+  "unsupportedCapabilities": [
+    "goal.native",
+    "workflow.native",
+    "loop.native",
+    "hook.lifecycle",
+    "test.coverage",
+    "browser.run",
+    "semantic.review",
+    "risk.review",
+    "security.scan"
+  ],
+  "lifecycleCapture": {
+    "strategy": "wrapper",
+    "recordsHostEvents": true,
+    "recordsPhaseEvents": false
+  },
+  "projectionTargets": [
+    {
+      "path": ".pi/AGENTS.md",
+      "kind": "instruction",
+      "driftPolicy": "block"
+    },
+    {
+      "path": ".pi/skills",
+      "kind": "skill",
+      "driftPolicy": "block"
+    },
+    {
+      "path": ".pi/paveda-projections.json",
+      "kind": "sidecar",
+      "driftPolicy": "block"
+    }
+  ],
+  "eventMappings": [
+    {
+      "hostEvent": "command.started",
+      "pavedaEvent": "phase.started"
+    },
+    {
+      "hostEvent": "command.completed",
+      "pavedaEvent": "evidence.recorded"
+    }
+  ],
+  "commandMappings": [
+    {
+      "pavedaCommand": "paveda run",
+      "hostPrimitive": "wrapper"
+    }
+  ],
+  "policyConstraints": [
+    "Use shallow wrapper mode until host-native lifecycle primitives are declared."
+  ],
+  "knownQuirks": [
+    "Strict profile may block if deep review capabilities are required."
+  ],
+  "conformanceFixtures": [
+    "code-change-without-tests-blocks",
+    "release-not-supported"
+  ]
+}

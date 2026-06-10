@@ -190,7 +190,7 @@ ambiguity-required: 0.2
 			relativePath: "do/SKILL.md",
 			frontmatter: {
 				router: "enabled",
-				ambiguityRequired: 0.2,
+				ambiguityRequired: 0.15,
 			},
 		});
 	});

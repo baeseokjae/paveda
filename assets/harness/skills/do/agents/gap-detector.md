@@ -143,8 +143,8 @@ Canary 실패 시 P2P Gate와 동일하게 처리: Gap Analysis에 포함 후 RE
 
 > **Command Resolution**: Lint/Test/Build commands are resolved from the current
 > repository's package manager metadata and `package.json` scripts. Missing
-> commands are recorded as `SKIP`; do not create new project configuration during
-> verification.
+> required test infrastructure blocks and should trigger a setup-sprint decision.
+> Non-testable docs/metadata changes use auditable `not_applicable` evidence.
 
 ```bash
 PKG_MANAGER="pnpm"

@@ -1,0 +1,116 @@
+{
+  "profile": "fast",
+  "schemaVersion": "1.0.0",
+  "contractVersion": "1.0.0",
+  "minimumPavedaVersion": "0.1.0",
+  "description": "Fast feedback profile for low-risk tasks; still records evidence and never treats skipped gates as pass.",
+  "extends": null,
+  "scoreThresholds": [
+    {
+      "metric": "ambiguity_score",
+      "pass": 0.35,
+      "warn": 0.25,
+      "block": 0.5,
+      "repairTrigger": 0.35,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "plan_quality_score",
+      "pass": 0.7,
+      "warn": 0.8,
+      "block": 0.45,
+      "repairTrigger": 0.65,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "progress_score",
+      "pass": 0.65,
+      "warn": 0.75,
+      "block": 0.4,
+      "repairTrigger": 0.6,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "match_score",
+      "pass": 0.75,
+      "warn": 0.85,
+      "block": 0.5,
+      "repairTrigger": 0.7,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "verification_score",
+      "pass": 0.6,
+      "warn": 0.75,
+      "block": 0.4,
+      "repairTrigger": 0.6,
+      "overrideAllowed": true
+    },
+    {
+      "metric": "risk_score",
+      "pass": 0.45,
+      "warn": 0.35,
+      "block": 0.65,
+      "repairTrigger": 0.45,
+      "overrideAllowed": true
+    }
+  ],
+  "requiredGates": [
+    {
+      "id": "unit-gate",
+      "phase": "unit-test",
+      "evidenceKind": "unit_test",
+      "requiredForTaskTypes": [
+        "code",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "task changes executable behavior",
+      "capability": "test.unit",
+      "missingCapabilityBehavior": "ask_setup_sprint",
+      "notApplicablePolicy": {
+        "allowed": true,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    }
+  ],
+  "verificationLadder": [
+    "command",
+    "unit_test",
+    "semantic_review"
+  ],
+  "overridePolicy": {
+    "allowedModes": [
+      "approve-override",
+      "import",
+      "regenerate"
+    ],
+    "auditRequired": true,
+    "releaseForbidden": [
+      "unit-gate",
+      "e2e-gate"
+    ],
+    "expiryRequired": true
+  },
+  "notApplicablePolicy": {
+    "allowedTaskTypes": [
+      "docs",
+      "metadata"
+    ],
+    "requiresRationale": true,
+    "requiresClassifierReason": true,
+    "ambiguousBehavior": "ask_user"
+  },
+  "releaseSupport": {
+    "status": "supported",
+    "suggestedProfile": "fast",
+    "unimplementedGates": []
+  }
+}

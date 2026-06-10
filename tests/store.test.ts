@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +6,7 @@ import {
 	CURRENT_SCHEMA_VERSION,
 	DEFAULT_SQLITE_BUSY_TIMEOUT_MS,
 	EventStore,
+	generateUuidV7,
 	resolveStorePath,
 } from "../src/store/index.js";
 
@@ -376,6 +377,255 @@ describe("EventStore", () => {
 		store.close();
 	});
 
+	it("creates UUID v7 runs and records portable ledger evidence", () => {
+		const store = openTempStore();
+		const run = store.createRun({
+			objective: "Implement contract validation",
+			acceptanceCriteria: ["schema validates"],
+			profile: "strict",
+			host: "codex",
+			context: { cwd: "/repo" },
+			ts: 100,
+		});
+
+		expect(run.runId).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+		);
+		expect(run).toMatchObject({
+			objective: "Implement contract validation",
+			acceptanceCriteria: ["schema validates"],
+			profile: "strict",
+			host: "codex",
+			status: "active",
+			createdAt: 100,
+			updatedAt: 100,
+			context: { cwd: "/repo" },
+		});
+
+		expect(
+			store.upsertPhase({
+				runId: run.runId,
+				phaseId: "unit-test",
+				status: "active",
+				startedAt: 110,
+				hostMapping: { primitive: "pnpm test" },
+			}),
+		).toMatchObject({
+			runId: run.runId,
+			phaseId: "unit-test",
+			status: "active",
+			startedAt: 110,
+			hostMapping: { primitive: "pnpm test" },
+		});
+		expect(
+			store.appendPhaseEvent({
+				runId: run.runId,
+				phaseId: "unit-test",
+				eventType: "phase.started",
+				status: "active",
+				payload: { attempt: 1 },
+				ts: 111,
+			}),
+		).toMatchObject({
+			phaseId: "unit-test",
+			eventType: "phase.started",
+			status: "active",
+			payload: { attempt: 1 },
+		});
+
+		const artifact = store.recordArtifact({
+			runId: run.runId,
+			kind: "test-report",
+			relativePath: `${run.runId}/unit.json`,
+			sha256: "a".repeat(64),
+			byteLength: 42,
+			redactionStatus: "redacted",
+			metadata: { command: "pnpm test" },
+			createdAt: 120,
+		});
+		expect(artifact).toMatchObject({
+			runId: run.runId,
+			relativePath: `${run.runId}/unit.json`,
+			sha256: "a".repeat(64),
+			redactionStatus: "redacted",
+			metadata: { command: "pnpm test" },
+		});
+
+		const evidence = store.recordEvidence({
+			runId: run.runId,
+			phaseId: "unit-test",
+			evidenceId: "unit-test-result",
+			kind: "unit_test",
+			result: "pass",
+			command: "pnpm test",
+			exitCode: 0,
+			artifactId: artifact.id,
+			ts: 121,
+		});
+		expect(evidence).toMatchObject({
+			runId: run.runId,
+			phaseId: "unit-test",
+			evidenceId: "unit-test-result",
+			result: "pass",
+			artifactId: artifact.id,
+		});
+		expect(
+			store.recordScore({
+				runId: run.runId,
+				metric: "verification_score",
+				value: 1,
+				decision: "pass",
+				threshold: 1,
+				rationale: "required evidence passed",
+				ts: 122,
+			}),
+		).toMatchObject({
+			metric: "verification_score",
+			value: 1,
+			decision: "pass",
+			threshold: 1,
+		});
+		expect(
+			store.recordCapability({
+				runId: run.runId,
+				capabilityId: "test.unit",
+				support: "wrapped",
+				confidence: 0.9,
+				source: "manifest",
+				details: { command: "pnpm test" },
+				ts: 123,
+			}),
+		).toMatchObject({
+			capabilityId: "test.unit",
+			confidence: 0.9,
+			details: { command: "pnpm test" },
+		});
+		expect(
+			store.appendHostEvent({
+				runId: run.runId,
+				host: "codex",
+				eventType: "goal.updated",
+				normalizedStatus: "in_progress",
+				payload: { phase: "unit-test" },
+				ts: 124,
+			}),
+		).toMatchObject({
+			host: "codex",
+			eventType: "goal.updated",
+			normalizedStatus: "in_progress",
+		});
+		expect(
+			store.recordDecision({
+				runId: run.runId,
+				phaseId: "unit-test",
+				decisionType: "override",
+				decision: "approve-override",
+				rationale: "temporary audited exception",
+				override: true,
+				expiresAt: 200,
+				ts: 125,
+			}),
+		).toMatchObject({
+			decisionType: "override",
+			override: true,
+			expiresAt: 200,
+		});
+		expect(
+			store.recordLearningPattern({
+				runId: run.runId,
+				scope: "project",
+				state: "candidate",
+				pattern: "Use focused contract asset tests",
+				confidence: 0.8,
+				evidenceId: evidence.id,
+				ts: 126,
+			}),
+		).toMatchObject({
+			scope: "project",
+			state: "candidate",
+			evidenceId: evidence.id,
+		});
+		expect(
+			store.recordPolicyViolation({
+				runId: run.runId,
+				policyId: "unit-gate",
+				severity: "block",
+				message: "unit evidence missing",
+				blocked: true,
+				evidenceId: evidence.id,
+				ts: 127,
+			}),
+		).toMatchObject({
+			policyId: "unit-gate",
+			severity: "block",
+			blocked: true,
+		});
+
+		expect(store.listPhaseEvents(run.runId)).toHaveLength(1);
+		expect(store.listArtifacts(run.runId)).toHaveLength(1);
+		expect(store.listEvidence(run.runId)).toHaveLength(1);
+		expect(store.listScores(run.runId)).toHaveLength(1);
+		expect(store.completeRun(run.runId, "completed", 130)).toMatchObject({
+			status: "completed",
+			completedAt: 130,
+		});
+
+		store.close();
+	});
+
+	it("writes raw artifacts below the .paveda artifact root and records hashes", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-ledger-artifacts-"));
+		tempDirs.push(dir);
+		const store = new EventStore(join(dir, ".paveda", "ledger", "paveda.db"));
+		const run = store.createRun({ objective: "Capture artifact", ts: 100 });
+
+		const artifact = store.writeArtifact({
+			runId: run.runId,
+			kind: "stdout",
+			fileName: "stdout.txt",
+			content: "hello\n",
+			redactionStatus: "not_required",
+			createdAt: 110,
+		});
+
+		expect(artifact).toMatchObject({
+			relativePath: `${run.runId}/stdout.txt`,
+			sha256: "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03",
+			byteLength: 6,
+		});
+		expect(existsSync(join(dir, ".paveda", "artifacts", run.runId, "stdout.txt"))).toBe(true);
+		expect(() =>
+			store.writeArtifact({
+				runId: run.runId,
+				kind: "stdout",
+				fileName: "../escape.txt",
+				content: "bad",
+			}),
+		).toThrow("Artifact fileName must be a plain file name");
+
+		store.close();
+	});
+
+	it("rejects non-v7 run ids and the forbidden skip evidence result", () => {
+		const store = openTempStore();
+		const runId = generateUuidV7(100);
+		const run = store.createRun({ runId, objective: "Validate ids", ts: 100 });
+
+		expect(() => store.createRun({ runId: "run-1", objective: "Bad id" })).toThrow(
+			"Run id must be a UUID v7",
+		);
+		expect(() =>
+			store.recordEvidence({
+				runId: run.runId,
+				evidenceId: "bad-result",
+				kind: "unit_test",
+				result: "skip" as never,
+			}),
+		).toThrow("Invalid evidence result: skip");
+
+		store.close();
+	});
+
 	it("resolves standard harness store paths", () => {
 		const dir = mkdtempSync(join(tmpdir(), "paveda-store-path-"));
 		tempDirs.push(dir);
@@ -386,16 +636,18 @@ describe("EventStore", () => {
 			Reflect.deleteProperty(process.env, "PAVEDA_STORE_PATH");
 			process.chdir(dir);
 
-			expect(resolveStorePath("project")).toBe(join(process.cwd(), ".harness", "store.db"));
-			expect(resolveStorePath("project", join(dir, "target-project"))).toBe(
-				join(dir, "target-project", ".harness", "store.db"),
+			expect(resolveStorePath("project")).toBe(
+				join(process.cwd(), ".paveda", "ledger", "paveda.db"),
 			);
-			expect(resolveStorePath("user")).toBe(join(homedir(), ".harness", "store.db"));
+			expect(resolveStorePath("project", join(dir, "target-project"))).toBe(
+				join(dir, "target-project", ".paveda", "ledger", "paveda.db"),
+			);
+			expect(resolveStorePath("user")).toBe(join(homedir(), ".paveda", "ledger", "paveda.db"));
 			expect(
 				resolveStorePath("user", join(dir, "target-project"), {
 					HOME: join(dir, "fake-home"),
 				}),
-			).toBe(join(dir, "fake-home", ".harness", "store.db"));
+			).toBe(join(dir, "fake-home", ".paveda", "ledger", "paveda.db"));
 
 			process.env.PAVEDA_STORE_PATH = join(dir, "custom.db");
 			expect(resolveStorePath("project")).toBe(join(dir, "custom.db"));
@@ -473,7 +725,7 @@ describe("EventStore", () => {
 				.prepare("SELECT name FROM schema_migrations WHERE version = ?")
 				.get(CURRENT_SCHEMA_VERSION),
 		).toMatchObject({
-			name: "policy_decisions",
+			name: "portable_execution_ledger",
 		});
 
 		store.close();

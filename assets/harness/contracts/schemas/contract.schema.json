@@ -1,0 +1,1474 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://paveda.dev/schemas/contract.schema.json",
+  "title": "Paveda contract schema",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/universalContract"
+    },
+    {
+      "$ref": "#/$defs/profileManifest"
+    },
+    {
+      "$ref": "#/$defs/hostDeclaration"
+    }
+  ],
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"
+    },
+    "profileId": {
+      "type": "string",
+      "enum": [
+        "fast",
+        "standard",
+        "strict",
+        "release"
+      ]
+    },
+    "taskType": {
+      "type": "string",
+      "enum": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ]
+    },
+    "evidenceResult": {
+      "type": "string",
+      "enum": [
+        "pass",
+        "fail",
+        "block",
+        "not_applicable",
+        "inconclusive"
+      ]
+    },
+    "evidenceKind": {
+      "type": "string",
+      "enum": [
+        "command",
+        "unit_test",
+        "e2e_test",
+        "integration_test",
+        "coverage",
+        "typecheck",
+        "lint",
+        "build",
+        "semantic_review",
+        "adversarial_review",
+        "risk_review",
+        "security_scan",
+        "screenshot",
+        "trace",
+        "manual_decision",
+        "host_event"
+      ]
+    },
+    "capabilityId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$"
+    },
+    "stringList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "extensionFields": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "resultPolicy": {
+      "type": "object",
+      "required": [
+        "acceptedResults",
+        "blockingResults",
+        "requiresArtifact",
+        "requiresCommand",
+        "requiresExitCode",
+        "requiresRationale",
+        "flakyHandling",
+        "passRequiresDirectEvidence"
+      ],
+      "properties": {
+        "acceptedResults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceResult"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "blockingResults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceResult"
+          },
+          "uniqueItems": true
+        },
+        "requiresArtifact": {
+          "type": "boolean"
+        },
+        "requiresCommand": {
+          "type": "boolean"
+        },
+        "requiresExitCode": {
+          "type": "boolean"
+        },
+        "requiresRationale": {
+          "type": "boolean"
+        },
+        "flakyHandling": {
+          "type": "string",
+          "enum": [
+            "inconclusive",
+            "block",
+            "repair"
+          ]
+        },
+        "passRequiresDirectEvidence": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "requiredEvidence": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "requiredForProfiles",
+        "resultPolicy",
+        "providerCapability",
+        "artifactTypes",
+        "scope",
+        "notApplicableAllowed",
+        "notApplicableRationaleRequired",
+        "redactionRequired",
+        "ledgerFields"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "kind": {
+          "$ref": "#/$defs/evidenceKind"
+        },
+        "requiredForProfiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/profileId"
+          },
+          "uniqueItems": true
+        },
+        "resultPolicy": {
+          "$ref": "#/$defs/resultPolicy"
+        },
+        "providerCapability": {
+          "$ref": "#/$defs/capabilityId"
+        },
+        "artifactTypes": {
+          "$ref": "#/$defs/stringList"
+        },
+        "scope": {
+          "type": "string",
+          "enum": [
+            "changed_behavior",
+            "changed_files",
+            "whole_project",
+            "user_visible",
+            "system_boundary",
+            "host_lifecycle",
+            "manual_decision"
+          ]
+        },
+        "notApplicableAllowed": {
+          "type": "boolean"
+        },
+        "notApplicableRationaleRequired": {
+          "type": "boolean"
+        },
+        "redactionRequired": {
+          "type": "boolean"
+        },
+        "ledgerFields": {
+          "$ref": "#/$defs/stringList"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "if": {
+        "properties": {
+          "notApplicableAllowed": {
+            "const": true
+          }
+        },
+        "required": [
+          "notApplicableAllowed"
+        ]
+      },
+      "then": {
+        "properties": {
+          "notApplicableRationaleRequired": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "notApplicableRationaleRequired"
+        ]
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "phaseNode": {
+      "type": "object",
+      "required": [
+        "id",
+        "label",
+        "kind",
+        "required",
+        "hostPrimitivePreference",
+        "requiredCapabilities",
+        "inputs",
+        "outputs",
+        "requiredEvidence",
+        "scoreImpacts",
+        "failurePolicy"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "intake",
+            "clarification",
+            "planning",
+            "execution",
+            "scoring",
+            "verification",
+            "repair",
+            "handoff",
+            "block"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "hostPrimitivePreference": {
+          "type": "string",
+          "enum": [
+            "host-native",
+            "paveda-wrapper",
+            "none"
+          ]
+        },
+        "requiredCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capabilityId"
+          },
+          "uniqueItems": true
+        },
+        "inputs": {
+          "$ref": "#/$defs/stringList"
+        },
+        "outputs": {
+          "$ref": "#/$defs/stringList"
+        },
+        "requiredEvidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/requiredEvidence"
+          }
+        },
+        "scoreImpacts": {
+          "$ref": "#/$defs/stringList"
+        },
+        "failurePolicy": {
+          "type": "object",
+          "required": [
+            "onFail",
+            "missingCapability"
+          ],
+          "properties": {
+            "onFail": {
+              "type": "string",
+              "enum": [
+                "repair",
+                "block",
+                "continue"
+              ]
+            },
+            "missingCapability": {
+              "type": "string",
+              "enum": [
+                "block",
+                "ask_setup_sprint",
+                "not_applicable_allowed"
+              ]
+            },
+            "maxAttempts": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "metadata": {
+              "$ref": "#/$defs/extensionFields"
+            },
+            "extensions": {
+              "$ref": "#/$defs/extensionFields"
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          },
+          "additionalProperties": false
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "phaseEdge": {
+      "type": "object",
+      "required": [
+        "from",
+        "to",
+        "condition",
+        "type",
+        "allowedProfiles",
+        "requiresEvidence",
+        "recordsDecision"
+      ],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "repair",
+            "block",
+            "terminal"
+          ]
+        },
+        "allowedProfiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/profileId"
+          },
+          "uniqueItems": true
+        },
+        "requiresEvidence": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]*$"
+          },
+          "uniqueItems": true
+        },
+        "recordsDecision": {
+          "type": "boolean"
+        },
+        "maxAttempts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "if": {
+        "properties": {
+          "type": {
+            "const": "repair"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "maxAttempts": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "required": [
+          "maxAttempts"
+        ]
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "phaseGraph": {
+      "type": "object",
+      "required": [
+        "nodes",
+        "edges",
+        "happyPath",
+        "entryPhase",
+        "terminalPhases",
+        "repairEdges"
+      ],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/phaseNode"
+          },
+          "minItems": 1
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/phaseEdge"
+          }
+        },
+        "happyPath": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "entryPhase": {
+          "type": "string"
+        },
+        "terminalPhases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "repairEdges": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "scoreCalculation": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "evidence_ratio",
+            "threshold_check",
+            "weighted_inputs",
+            "manual_review",
+            "risk_rule",
+            "direct_gate_result"
+          ]
+        },
+        "weights": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "number"
+          }
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "scoreMetric": {
+      "type": "object",
+      "required": [
+        "id",
+        "direction",
+        "range",
+        "description",
+        "inputs",
+        "calculation",
+        "requiredEvidence",
+        "ledgerField"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "higher_is_better",
+            "lower_is_better"
+          ]
+        },
+        "range": {
+          "type": "object",
+          "required": [
+            "min",
+            "max"
+          ],
+          "properties": {
+            "min": {
+              "type": "number"
+            },
+            "max": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "inputs": {
+          "$ref": "#/$defs/stringList"
+        },
+        "calculation": {
+          "$ref": "#/$defs/scoreCalculation"
+        },
+        "requiredEvidence": {
+          "$ref": "#/$defs/stringList"
+        },
+        "ledgerField": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_.]*$"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "requiredGate": {
+      "type": "object",
+      "required": [
+        "id",
+        "phase",
+        "evidenceKind",
+        "requiredForTaskTypes",
+        "conditionalWhen",
+        "capability",
+        "missingCapabilityBehavior",
+        "notApplicablePolicy",
+        "failureBehavior",
+        "repairAllowed",
+        "releaseOverrideAllowed"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "phase": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "evidenceKind": {
+          "$ref": "#/$defs/evidenceKind"
+        },
+        "requiredForTaskTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/taskType"
+          },
+          "uniqueItems": true
+        },
+        "conditionalWhen": {
+          "type": "string"
+        },
+        "capability": {
+          "$ref": "#/$defs/capabilityId"
+        },
+        "missingCapabilityBehavior": {
+          "type": "string",
+          "enum": [
+            "block",
+            "ask_setup_sprint",
+            "not_applicable_allowed"
+          ]
+        },
+        "notApplicablePolicy": {
+          "type": "object",
+          "required": [
+            "allowed",
+            "requiresRationale",
+            "requiresClassifierReason",
+            "requiresUserApproval"
+          ],
+          "properties": {
+            "allowed": {
+              "type": "boolean"
+            },
+            "requiresRationale": {
+              "type": "boolean"
+            },
+            "requiresClassifierReason": {
+              "type": "boolean"
+            },
+            "requiresUserApproval": {
+              "type": "boolean"
+            },
+            "metadata": {
+              "$ref": "#/$defs/extensionFields"
+            },
+            "extensions": {
+              "$ref": "#/$defs/extensionFields"
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          },
+          "additionalProperties": false
+        },
+        "failureBehavior": {
+          "type": "string",
+          "enum": [
+            "repair_then_block",
+            "block",
+            "warn"
+          ]
+        },
+        "repairAllowed": {
+          "type": "boolean"
+        },
+        "releaseOverrideAllowed": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "scoreThreshold": {
+      "type": "object",
+      "required": [
+        "metric",
+        "pass",
+        "warn",
+        "block",
+        "repairTrigger",
+        "overrideAllowed"
+      ],
+      "properties": {
+        "metric": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "pass": {
+          "type": "number"
+        },
+        "warn": {
+          "type": "number"
+        },
+        "block": {
+          "type": "number"
+        },
+        "repairTrigger": {
+          "type": "number"
+        },
+        "overrideAllowed": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "overridePolicy": {
+      "type": "object",
+      "required": [
+        "allowedModes",
+        "auditRequired",
+        "releaseForbidden",
+        "expiryRequired"
+      ],
+      "properties": {
+        "allowedModes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "approve-override",
+              "import",
+              "regenerate"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "auditRequired": {
+          "type": "boolean"
+        },
+        "releaseForbidden": {
+          "$ref": "#/$defs/stringList"
+        },
+        "expiryRequired": {
+          "type": "boolean"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "releaseSupport": {
+      "type": "object",
+      "required": [
+        "status",
+        "suggestedProfile",
+        "unimplementedGates"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "supported",
+            "not_supported_in_mvp"
+          ]
+        },
+        "suggestedProfile": {
+          "$ref": "#/$defs/profileId"
+        },
+        "unimplementedGates": {
+          "$ref": "#/$defs/stringList"
+        },
+        "blockMessage": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "profileManifest": {
+      "type": "object",
+      "required": [
+        "profile",
+        "schemaVersion",
+        "contractVersion",
+        "minimumPavedaVersion",
+        "description",
+        "extends",
+        "scoreThresholds",
+        "requiredGates",
+        "verificationLadder",
+        "overridePolicy",
+        "notApplicablePolicy",
+        "releaseSupport"
+      ],
+      "properties": {
+        "profile": {
+          "$ref": "#/$defs/profileId"
+        },
+        "schemaVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "minimumPavedaVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "extends": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scoreThresholds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scoreThreshold"
+          },
+          "minItems": 1
+        },
+        "requiredGates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/requiredGate"
+          }
+        },
+        "verificationLadder": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceKind"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "overridePolicy": {
+          "$ref": "#/$defs/overridePolicy"
+        },
+        "notApplicablePolicy": {
+          "type": "object",
+          "required": [
+            "allowedTaskTypes",
+            "requiresRationale",
+            "requiresClassifierReason",
+            "ambiguousBehavior"
+          ],
+          "properties": {
+            "allowedTaskTypes": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/taskType"
+              },
+              "uniqueItems": true
+            },
+            "requiresRationale": {
+              "type": "boolean"
+            },
+            "requiresClassifierReason": {
+              "type": "boolean"
+            },
+            "ambiguousBehavior": {
+              "type": "string",
+              "enum": [
+                "ask_user",
+                "block",
+                "repair"
+              ]
+            },
+            "metadata": {
+              "$ref": "#/$defs/extensionFields"
+            },
+            "extensions": {
+              "$ref": "#/$defs/extensionFields"
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          },
+          "additionalProperties": false
+        },
+        "releaseSupport": {
+          "$ref": "#/$defs/releaseSupport"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "projectionRules": {
+      "type": "object",
+      "required": [
+        "sourceRoots",
+        "packageAssetRoots",
+        "generatedProjectionTargets",
+        "driftPolicy",
+        "allowedDriftResolutions"
+      ],
+      "properties": {
+        "sourceRoots": {
+          "$ref": "#/$defs/stringList"
+        },
+        "packageAssetRoots": {
+          "$ref": "#/$defs/stringList"
+        },
+        "generatedProjectionTargets": {
+          "$ref": "#/$defs/stringList"
+        },
+        "driftPolicy": {
+          "type": "string",
+          "enum": [
+            "block",
+            "warn"
+          ]
+        },
+        "allowedDriftResolutions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "import",
+              "regenerate",
+              "approve-override"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "learningPolicy": {
+      "type": "object",
+      "required": [
+        "states",
+        "promotion",
+        "restrictions"
+      ],
+      "properties": {
+        "states": {
+          "$ref": "#/$defs/stringList"
+        },
+        "promotion": {
+          "type": "object",
+          "required": [
+            "minimumSuccessfulRuns",
+            "minimumConfidence",
+            "requiresUserApproval",
+            "requiresEvidenceAudit"
+          ],
+          "properties": {
+            "minimumSuccessfulRuns": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "minimumConfidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "requiresUserApproval": {
+              "type": "boolean"
+            },
+            "requiresEvidenceAudit": {
+              "type": "boolean"
+            },
+            "metadata": {
+              "$ref": "#/$defs/extensionFields"
+            },
+            "extensions": {
+              "$ref": "#/$defs/extensionFields"
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          },
+          "additionalProperties": false
+        },
+        "restrictions": {
+          "type": "object",
+          "required": [
+            "cannotRelaxGates",
+            "cannotRelaxThresholds",
+            "cannotBypassReleaseRestrictions"
+          ],
+          "properties": {
+            "cannotRelaxGates": {
+              "type": "boolean"
+            },
+            "cannotRelaxThresholds": {
+              "type": "boolean"
+            },
+            "cannotBypassReleaseRestrictions": {
+              "type": "boolean"
+            },
+            "metadata": {
+              "$ref": "#/$defs/extensionFields"
+            },
+            "extensions": {
+              "$ref": "#/$defs/extensionFields"
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          },
+          "additionalProperties": false
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "universalContract": {
+      "type": "object",
+      "required": [
+        "id",
+        "schemaVersion",
+        "contractVersion",
+        "minimumPavedaVersion",
+        "description",
+        "profiles",
+        "phaseGraph",
+        "taskTypes",
+        "scoreMetrics",
+        "evidenceResults",
+        "gates",
+        "capabilityRequirements",
+        "projectionRules",
+        "overridePolicy",
+        "learningPolicy"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9.-]*$"
+        },
+        "schemaVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "contractVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "minimumPavedaVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "profiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/profileId"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "phaseGraph": {
+          "$ref": "#/$defs/phaseGraph"
+        },
+        "taskTypes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/taskType"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "scoreMetrics": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/scoreMetric"
+          },
+          "minItems": 1
+        },
+        "evidenceResults": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/evidenceResult"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "gates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/requiredGate"
+          }
+        },
+        "capabilityRequirements": {
+          "type": "array",
+          "items": {
+            "$ref": "https://paveda.dev/schemas/capabilities.schema.json#/$defs/capabilityDefinition"
+          },
+          "minItems": 1
+        },
+        "projectionRules": {
+          "$ref": "#/$defs/projectionRules"
+        },
+        "overridePolicy": {
+          "$ref": "#/$defs/overridePolicy"
+        },
+        "learningPolicy": {
+          "$ref": "#/$defs/learningPolicy"
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    },
+    "hostDeclaration": {
+      "type": "object",
+      "required": [
+        "host",
+        "schemaVersion",
+        "declarationVersion",
+        "minimumPavedaVersion",
+        "displayName",
+        "supportLevel",
+        "versionConstraints",
+        "capabilities",
+        "unsupportedCapabilities",
+        "lifecycleCapture",
+        "projectionTargets",
+        "eventMappings",
+        "commandMappings",
+        "policyConstraints",
+        "knownQuirks",
+        "conformanceFixtures"
+      ],
+      "properties": {
+        "host": {
+          "type": "string",
+          "enum": [
+            "claude-code",
+            "codex",
+            "pi",
+            "hermes"
+          ]
+        },
+        "schemaVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "declarationVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "minimumPavedaVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "supportLevel": {
+          "type": "string",
+          "enum": [
+            "deep",
+            "shallow"
+          ]
+        },
+        "versionConstraints": {
+          "type": "object",
+          "required": [
+            "detectedVersionRange",
+            "minimumHostVersion"
+          ],
+          "properties": {
+            "detectedVersionRange": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "minimumHostVersion": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "metadata": {
+              "$ref": "#/$defs/extensionFields"
+            },
+            "extensions": {
+              "$ref": "#/$defs/extensionFields"
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          },
+          "additionalProperties": false
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "https://paveda.dev/schemas/capabilities.schema.json#/$defs/hostCapabilityEntry"
+          }
+        },
+        "unsupportedCapabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/capabilityId"
+          },
+          "uniqueItems": true
+        },
+        "lifecycleCapture": {
+          "type": "object",
+          "required": [
+            "strategy",
+            "recordsHostEvents",
+            "recordsPhaseEvents"
+          ],
+          "properties": {
+            "strategy": {
+              "type": "string",
+              "enum": [
+                "hooks",
+                "wrapper",
+                "manual",
+                "none"
+              ]
+            },
+            "recordsHostEvents": {
+              "type": "boolean"
+            },
+            "recordsPhaseEvents": {
+              "type": "boolean"
+            },
+            "metadata": {
+              "$ref": "#/$defs/extensionFields"
+            },
+            "extensions": {
+              "$ref": "#/$defs/extensionFields"
+            }
+          },
+          "patternProperties": {
+            "^x-": {}
+          },
+          "additionalProperties": false
+        },
+        "projectionTargets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "path",
+              "kind",
+              "driftPolicy"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "instruction",
+                  "skill",
+                  "config",
+                  "sidecar"
+                ]
+              },
+              "driftPolicy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "warn"
+                ]
+              },
+              "metadata": {
+                "$ref": "#/$defs/extensionFields"
+              },
+              "extensions": {
+                "$ref": "#/$defs/extensionFields"
+              }
+            },
+            "patternProperties": {
+              "^x-": {}
+            },
+            "additionalProperties": false
+          }
+        },
+        "eventMappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "hostEvent",
+              "pavedaEvent"
+            ],
+            "properties": {
+              "hostEvent": {
+                "type": "string"
+              },
+              "pavedaEvent": {
+                "type": "string"
+              },
+              "metadata": {
+                "$ref": "#/$defs/extensionFields"
+              },
+              "extensions": {
+                "$ref": "#/$defs/extensionFields"
+              }
+            },
+            "patternProperties": {
+              "^x-": {}
+            },
+            "additionalProperties": false
+          }
+        },
+        "commandMappings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "pavedaCommand",
+              "hostPrimitive"
+            ],
+            "properties": {
+              "pavedaCommand": {
+                "type": "string"
+              },
+              "hostPrimitive": {
+                "type": "string"
+              },
+              "metadata": {
+                "$ref": "#/$defs/extensionFields"
+              },
+              "extensions": {
+                "$ref": "#/$defs/extensionFields"
+              }
+            },
+            "patternProperties": {
+              "^x-": {}
+            },
+            "additionalProperties": false
+          }
+        },
+        "policyConstraints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "knownQuirks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "conformanceFixtures": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9-]+$"
+          },
+          "uniqueItems": true
+        },
+        "metadata": {
+          "$ref": "#/$defs/extensionFields"
+        },
+        "extensions": {
+          "$ref": "#/$defs/extensionFields"
+        }
+      },
+      "patternProperties": {
+        "^x-": {}
+      },
+      "additionalProperties": false
+    }
+  }
+}

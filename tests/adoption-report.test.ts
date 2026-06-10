@@ -47,7 +47,7 @@ describe("adoption report", () => {
 			expect(result.runtimeSmoke).toMatchObject({
 				status: "skipped",
 			});
-			expect(existsSync(join(cwd, ".harness", "store.db"))).toBe(false);
+			expect(existsSync(join(cwd, ".paveda", "ledger", "paveda.db"))).toBe(false);
 			expect(formatAdoptionReport(result)).toContain("SKIPPED runtime-smoke");
 		},
 	);
@@ -127,7 +127,7 @@ describe("adoption report", () => {
 		expect(formatted).toContain(
 			`recovery: paveda skills install-bundle --host codex --cwd ${cwd} --write`,
 		);
-		expect(existsSync(join(cwd, ".harness", "store.db"))).toBe(false);
+		expect(existsSync(join(cwd, ".paveda", "ledger", "paveda.db"))).toBe(false);
 	});
 
 	it("uses a provided CLI command for doctor recovery commands", () => {

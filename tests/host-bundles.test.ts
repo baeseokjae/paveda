@@ -117,9 +117,10 @@ describe("host skill bundles", () => {
 			join(dir, ...hostCase.skillRoot.split("/"), "do", "SKILL.md"),
 			"utf8",
 		);
-		expect(doSkill).toContain(`${hostCase.skillRoot}/do/scripts/detect-stagnation.sh`);
-		expect(doSkill).toContain(`\`${hostCase.contextRoot}/backend-patterns.md\``);
-		expect(doSkill).toContain(`\`${hostCase.contextRoot}/frontend-patterns.md\``);
+		expect(doSkill).toContain("# /do - Paveda Contract Shell");
+		expect(doSkill).toContain("## Host-Native Execution");
+		expect(doSkill).toContain("paveda projection status --host <host>");
+		expect(doSkill).toContain("paveda verify --run <run_id>");
 		expect(doSkill).not.toContain(".claude/hooks");
 		expect(doSkill).not.toContain(".claude/checks");
 		if (hostCase.host !== "harness") {

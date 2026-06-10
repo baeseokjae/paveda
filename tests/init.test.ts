@@ -89,6 +89,7 @@ describe("init", () => {
 		});
 		expect(result.nextCommands.map((command) => command.name)).toEqual([
 			"doctor",
+			"projection-status",
 			"skills-status",
 			"route-do",
 			"runtime-smoke",
@@ -99,9 +100,20 @@ describe("init", () => {
 		expect(
 			result.nextCommands.find((command) => command.name === "runtime-smoke")?.command,
 		).toContain("runtime-smoke");
+		expect(
+			result.nextCommands.find((command) => command.name === "projection-status")?.command,
+		).toContain(`projection status --host ${hostCase.host}`);
 		expect(result.bundle.skills.map((skill) => skill.name)).toEqual(skillNames);
 		expect(result.bundle.contextModules.map((module) => module.name)).toEqual(contextModuleNames);
 		expect(result.bundle.instructionFile?.targetPath).toBe(joinPath(dir, hostCase.instructionFile));
+		expect(result.paveda.projectionStatus.ok).toBe(true);
+		expect(existsSync(join(dir, ".paveda", "manifest.json"))).toBe(true);
+		expect(existsSync(join(dir, ".paveda", "contract.json"))).toBe(true);
+		expect(existsSync(join(dir, ".paveda", "capabilities.json"))).toBe(true);
+		expect(existsSync(join(dir, ".paveda", "test-policy.json"))).toBe(true);
+		expect(existsSync(join(dir, ".paveda", "profiles", "strict.json"))).toBe(true);
+		expect(existsSync(join(dir, ".paveda", "hosts", `${hostCase.host}.json`))).toBe(true);
+		expect(existsSync(join(dir, ".paveda", "projections", "index.json"))).toBe(true);
 		expect(result.doctor.ok).toBe(true);
 		expect(check(result.doctor, "host-skill-root")?.status).toBe("pass");
 		expect(check(result.doctor, "host-instruction-file")?.status).toBe("pass");
@@ -139,8 +151,9 @@ describe("init", () => {
 
 		const doSkill = readFileSync(joinPath(dir, hostCase.skillRoot, "do", "SKILL.md"), "utf8");
 		expect(doSkill).toContain("router: enabled");
-		expect(doSkill).toContain(`${hostCase.skillRoot}/do/scripts/detect-stagnation.sh`);
-		expect(doSkill).toContain(`\`${hostCase.contextRoot}/backend-patterns.md\``);
+		expect(doSkill).toContain("# /do - Paveda Contract Shell");
+		expect(doSkill).toContain("## Host-Native Execution");
+		expect(doSkill).toContain("paveda projection status --host <host>");
 		if (hostCase.host !== "harness") {
 			expect(doSkill).not.toContain(".harness/skills");
 			expect(doSkill).not.toContain(".harness/context-modules");
@@ -173,6 +186,7 @@ describe("init", () => {
 		expect(result.nextCommands.map((command) => command.name)).toEqual([
 			"write-init",
 			"doctor",
+			"projection-status",
 			"skills-status",
 			"route-do",
 			"runtime-smoke",
@@ -181,8 +195,10 @@ describe("init", () => {
 		expect(result.nextCommands[0]?.command).toContain("--skills do");
 		expect(result.nextCommands[0]?.command).toContain("--write");
 		expect(result.doctor.ok).toBe(false);
+		expect(result.paveda.projectionStatus.ok).toBe(false);
 		expect(existsSync(join(dir, ".codex", "skills", "do", "SKILL.md"))).toBe(false);
 		expect(existsSync(join(dir, "AGENTS.md"))).toBe(false);
+		expect(existsSync(join(dir, ".paveda", "manifest.json"))).toBe(false);
 	});
 
 	it("writes a host bundle and returns a passing doctor result", () => {
