@@ -16,6 +16,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { stringify as stringifyYaml } from "yaml";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const packageJson = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
@@ -377,11 +378,18 @@ async function runCliSmoke(tarballPath) {
 		assertIncludes(help, "adoption-report --host");
 		assertIncludes(help, "projection status --host");
 		assertIncludes(help, "contract validate");
+		assertIncludes(help, "pack build --cwd");
 		assertIncludes(help, "conformance --host");
 		assertIncludes(help, "do [--host");
 		assertIncludes(help, "run <host>");
 		assertIncludes(help, "verify --run");
+		assertIncludes(help, "progress --run");
+		assertIncludes(help, "handoff --run");
+		assertIncludes(help, "--report-junit path");
+		assertIncludes(help, "evidence collect --run");
 		assertIncludes(help, "evidence add --run");
+		assertIncludes(help, "search --query");
+		assertIncludes(help, "artifacts compact --before");
 		assertIncludes(help, "skills install-bundle --host");
 		assertIncludes(help, "runtime-smoke");
 		assertIncludes(help, "policy bundle");
@@ -390,6 +398,7 @@ async function runCliSmoke(tarballPath) {
 		assertIncludes(help, "--store-scope project|user");
 		assertIncludes(help, "instincts add --scope");
 		assertIncludes(help, "learning promote --id");
+		assertIncludes(help, "learning export-shared --id");
 		assertIncludes(help, "Commands that can write project files require --write.");
 		assertPackagedClaudeInstallUsesCurrentCli(
 			cliPath,
@@ -408,8 +417,12 @@ async function runCliSmoke(tarballPath) {
 			smokeRoot,
 			join(smokeRoot, "recovery project with spaces"),
 		);
-		assertPackagedConformanceCommand(cliPath, "codex");
-		assertPackagedConformanceCommand(cliPath, "claude-code");
+		assertPackagedConformanceCommand(cliPath, "codex", join(smokeRoot, "codex-conformance-report"));
+		assertPackagedConformanceCommand(
+			cliPath,
+			"claude-code",
+			join(smokeRoot, "claude-conformance-report"),
+		);
 
 		const skills = parseJson(runCli(cliPath, ["skills"]), "skills output");
 		assertSkillNames(skills, canonicalSkillNames);
@@ -815,6 +828,7 @@ async function runCliSmoke(tarballPath) {
 				assertPackagedRoute(cliPath, projectRoot, join(smokeRoot, "store.db"));
 				assertPackagedProjectionCli(cliPath, projectRoot);
 				assertPackagedContractFlow(cliPath, projectRoot);
+				assertPackagedPackCli(cliPath, projectRoot, join(smokeRoot, "pack-install-target"));
 			}
 		}
 		assertPackagedAdoptionReportFailureDetails(
@@ -1342,9 +1356,17 @@ function assertPackagedRuntimeSmokeCommand(cliPath, dbPath, projectRoot) {
 	}
 }
 
-function assertPackagedConformanceCommand(cliPath, host) {
+function assertPackagedConformanceCommand(cliPath, host, reportDir) {
 	const result = parseJson(
-		runCli(cliPath, ["conformance", "--host", host, "--profile", "strict"]),
+		runCli(cliPath, [
+			"conformance",
+			"--host",
+			host,
+			"--profile",
+			"strict",
+			"--report-dir",
+			reportDir,
+		]),
 		`${host} conformance output`,
 	);
 	if (
@@ -1357,6 +1379,15 @@ function assertPackagedConformanceCommand(cliPath, host) {
 	) {
 		fail(`packaged CLI smoke failed: ${host} conformance did not pass`);
 	}
+	if (
+		result?.reports?.jsonPath !== join(reportDir, "conformance.json") ||
+		result?.reports?.junitPath !== join(reportDir, "conformance.junit.xml")
+	) {
+		fail(`packaged CLI smoke failed: ${host} conformance did not report output paths`);
+	}
+	assertFile(join(reportDir, "conformance.json"));
+	assertFile(join(reportDir, "conformance.junit.xml"));
+	assertIncludes(readFileSync(join(reportDir, "conformance.junit.xml"), "utf8"), "<testsuites");
 }
 
 function assertPackagedInstinctsCli(cliPath, dbPath) {
@@ -1573,19 +1604,23 @@ function assertPackagedProjectionCli(cliPath, projectRoot) {
 		fail("packaged CLI smoke failed: projection import did not restore clean status");
 	}
 
-	const releaseResult = runCliResult(cliPath, [
-		"projection",
-		"regenerate",
-		"--host",
-		"codex",
-		"--cwd",
-		projectRoot,
-		"--profile",
-		"release",
-		"--write",
-	]);
-	if (releaseResult.status !== 1 || !releaseResult.stderr.includes("not_supported_in_mvp")) {
-		fail("packaged CLI smoke failed: release profile projection execution did not block");
+	const releaseProjection = parseJson(
+		runCli(cliPath, [
+			"projection",
+			"regenerate",
+			"--host",
+			"codex",
+			"--cwd",
+			projectRoot,
+			"--profile",
+			"release",
+			"--write",
+			"--force",
+		]),
+		"release projection regenerate output",
+	);
+	if (releaseProjection?.profile !== "release" || releaseProjection?.status?.ok !== true) {
+		fail("packaged CLI smoke failed: release profile projection regenerate did not pass");
 	}
 }
 
@@ -1606,6 +1641,7 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 	if (validation?.ok !== true) {
 		fail("packaged CLI smoke failed: contract validate did not pass");
 	}
+	assertPackagedContractCompiler(cliPath, projectRoot);
 
 	const explanation = parseJson(
 		runCli(cliPath, ["contract", "explain", "--cwd", projectRoot, "--profile", "strict"]),
@@ -1801,6 +1837,96 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 	if (explainedLearning?.policy?.cannotRelaxGates !== true) {
 		fail("packaged CLI smoke failed: learning explain did not expose strict policy");
 	}
+	const sharedLearning = parseJson(
+		runCli(cliPath, [
+			"learning",
+			"propose",
+			"--run",
+			runId,
+			"--cwd",
+			projectRoot,
+			"--scope",
+			"shared",
+			"--state",
+			"validated",
+			"--pattern",
+			"Share reviewed package smoke evidence collection across projects.",
+			"--confidence",
+			"0.96",
+			"--evidence-id",
+			String(learningEvidence.id),
+			"--metadata-json",
+			'{"evidenceAudit":"pass","redaction":"pass","conformance":"pass"}',
+		]),
+		"shared learning propose output",
+	);
+	const promotedSharedLearning = parseJson(
+		runCli(cliPath, [
+			"learning",
+			"promote",
+			"--id",
+			String(sharedLearning.id),
+			"--cwd",
+			projectRoot,
+			"--scope",
+			"shared",
+			"--approved-by",
+			"package-smoke-reviewer",
+			"--write",
+		]),
+		"shared learning promote output",
+	);
+	const sharedCandidatesPath = smokePath(
+		projectRoot,
+		".paveda",
+		"learning",
+		"shared-candidates.json",
+	);
+	assertFile(sharedCandidatesPath);
+	if (
+		promotedSharedLearning?.pattern?.state !== "promoted" ||
+		promotedSharedLearning?.knowledgeFile?.path !== sharedCandidatesPath
+	) {
+		fail("packaged CLI smoke failed: shared learning promote did not write candidates");
+	}
+	const sharedExportPath = join(projectRoot, "shared-learning-export.json");
+	const exportedSharedLearning = parseJson(
+		runCli(cliPath, [
+			"learning",
+			"export-shared",
+			"--id",
+			String(sharedLearning.id),
+			"--cwd",
+			projectRoot,
+			"--out",
+			sharedExportPath,
+		]),
+		"shared learning export output",
+	);
+	assertFile(sharedExportPath);
+	if (exportedSharedLearning?.pattern?.scope !== "shared") {
+		fail("packaged CLI smoke failed: shared learning export did not include shared pattern");
+	}
+	const sharedImportRoot = join(projectRoot, "shared-learning-import");
+	const importedSharedLearning = parseJson(
+		runCli(cliPath, [
+			"learning",
+			"import-shared",
+			"--cwd",
+			sharedImportRoot,
+			"--path",
+			sharedExportPath,
+			"--reviewed-by",
+			"package-smoke-import-reviewer",
+		]),
+		"shared learning import output",
+	);
+	assertFile(smokePath(sharedImportRoot, ".paveda", "learning", "shared-candidates.json"));
+	if (
+		importedSharedLearning?.imported?.reviewDecision?.reviewedBy !== "package-smoke-import-reviewer"
+	) {
+		fail("packaged CLI smoke failed: shared learning import did not record review decision");
+	}
 	const retiredLearning = parseJson(
 		runCli(cliPath, [
 			"learning",
@@ -1824,6 +1950,7 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 		fail("packaged CLI smoke failed: learning retire did not remove active promoted knowledge");
 	}
 
+	const missingReportDir = join(projectRoot, ".paveda-reports", "missing-evidence");
 	const missingEvidence = runCliResult(cliPath, [
 		"verify",
 		"--run",
@@ -1832,9 +1959,80 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 		projectRoot,
 		"--profile",
 		"strict",
+		"--report-dir",
+		missingReportDir,
 	]);
 	if (missingEvidence.status !== 1 || !missingEvidence.stdout.includes("unit-gate")) {
 		fail("packaged CLI smoke failed: verify did not block missing strict evidence");
+	}
+	const missingEvidenceOutput = parseJson(missingEvidence.stdout, "missing evidence verify output");
+	if (
+		missingEvidenceOutput?.reports?.jsonPath !== join(missingReportDir, "verify.json") ||
+		missingEvidenceOutput?.reports?.junitPath !== join(missingReportDir, "verify.junit.xml")
+	) {
+		fail("packaged CLI smoke failed: verify did not expose report output paths");
+	}
+	assertFile(join(missingReportDir, "verify.json"));
+	assertFile(join(missingReportDir, "verify.junit.xml"));
+	const missingReport = readJson(join(missingReportDir, "verify.json"));
+	if (
+		!Array.isArray(missingReport?.nodes) ||
+		!missingReport.nodes.some((node) => node?.case === "gate:unit-gate" && node?.status === "block")
+	) {
+		fail("packaged CLI smoke failed: verify JSON report did not include blocked unit gate");
+	}
+	assertIncludes(readFileSync(join(missingReportDir, "verify.junit.xml"), "utf8"), 'type="block"');
+	const progressStatusMarkdown = runCli(cliPath, [
+		"status",
+		"--run",
+		runId,
+		"--cwd",
+		projectRoot,
+		"--format",
+		"markdown",
+	]);
+	assertIncludes(progressStatusMarkdown, "## Evidence Gaps");
+	assertIncludes(progressStatusMarkdown, "unit-gate");
+	const progressOutput = parseJson(
+		runCli(cliPath, ["progress", "--run", runId, "--cwd", projectRoot, "--watch"]),
+		"progress output",
+	);
+	if (
+		progressOutput?.runId !== runId ||
+		!Array.isArray(progressOutput?.nextCommands) ||
+		!progressOutput.nextCommands.some((command) => command.includes("paveda evidence add"))
+	) {
+		fail("packaged CLI smoke failed: progress did not expose next evidence command");
+	}
+	const handoffMarkdown = runCli(cliPath, [
+		"handoff",
+		"--run",
+		runId,
+		"--cwd",
+		projectRoot,
+		"--markdown",
+	]);
+	assertIncludes(handoffMarkdown, "## Next Commands");
+	writeSmokeEvidencePolicy(projectRoot);
+	const collectedUnit = parseJson(
+		runCli(cliPath, [
+			"evidence",
+			"collect",
+			"--run",
+			runId,
+			"--cwd",
+			projectRoot,
+			"--kind",
+			"unit_test",
+		]),
+		"evidence collect output",
+	);
+	if (
+		collectedUnit?.ok !== true ||
+		collectedUnit?.evidence?.[0]?.result !== "pass" ||
+		collectedUnit?.artifacts?.[0]?.redactionStatus !== "not_required"
+	) {
+		fail("packaged CLI smoke failed: evidence collect did not record provider evidence");
 	}
 
 	const codeNa = parseJson(
@@ -2050,20 +2248,234 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 	if (wrapped?.exitCode !== 0 || wrapped?.evidence?.result !== "pass") {
 		fail("packaged CLI smoke failed: paveda run did not record command evidence");
 	}
+	const searchResults = parseJson(
+		runCli(cliPath, ["search", "--cwd", projectRoot, "--run", runId, "--query", "package"]),
+		"ledger search output",
+	);
+	if (
+		!Array.isArray(searchResults) ||
+		!searchResults.some((result) => result?.type === "evidence")
+	) {
+		fail("packaged CLI smoke failed: search did not find recorded evidence");
+	}
+	const wrappedArtifacts = parseJson(
+		runCli(cliPath, ["artifacts", "list", "--cwd", projectRoot, "--run", wrapped.run.runId]),
+		"artifacts list output",
+	);
+	if (!Array.isArray(wrappedArtifacts) || wrappedArtifacts.length === 0) {
+		fail("packaged CLI smoke failed: artifacts list did not return native run artifacts");
+	}
+	const compactDryRun = parseJson(
+		runCli(cliPath, [
+			"artifacts",
+			"compact",
+			"--cwd",
+			projectRoot,
+			"--run",
+			wrapped.run.runId,
+			"--before",
+			"9999999999999",
+		]),
+		"artifacts compact output",
+	);
+	if (
+		compactDryRun?.dryRun !== true ||
+		!Array.isArray(compactDryRun?.changes) ||
+		!compactDryRun.changes.some((change) => change?.action === "eligible")
+	) {
+		fail("packaged CLI smoke failed: artifacts compact did not report dry-run eligibility");
+	}
 
-	const releaseDo = runCliResult(cliPath, [
-		"do",
-		"--host",
-		"codex",
+	const releaseStarted = parseJson(
+		runCli(cliPath, [
+			"do",
+			"--host",
+			"codex",
+			"--cwd",
+			projectRoot,
+			"--profile",
+			"release",
+			"Release task",
+		]),
+		"release paveda do output",
+	);
+	if (
+		releaseStarted?.profile !== "release" ||
+		releaseStarted?.hostNative?.status !== "native_handoff"
+	) {
+		fail("packaged CLI smoke failed: release profile do did not start");
+	}
+	const highRiskRelease = parseJson(
+		runCli(cliPath, [
+			"do",
+			"--host",
+			"codex",
+			"--cwd",
+			projectRoot,
+			"--profile",
+			"release",
+			"--task-type",
+			"api",
+			"--risk-surfaces",
+			"public-api",
+			"Release public API task",
+		]),
+		"high-risk release do output",
+	);
+	const highRiskVerify = runCliResult(cliPath, [
+		"verify",
+		"--run",
+		highRiskRelease.run.runId,
 		"--cwd",
 		projectRoot,
 		"--profile",
 		"release",
-		"Release task",
 	]);
-	if (releaseDo.status !== 1 || !releaseDo.stderr.includes("not_supported_in_mvp")) {
-		fail("packaged CLI smoke failed: release profile do did not early block");
+	if (
+		highRiskVerify.status !== 1 ||
+		!highRiskVerify.stdout.includes("risk-gate") ||
+		!highRiskVerify.stdout.includes("security-gate")
+	) {
+		fail("packaged CLI smoke failed: high-risk release did not require risk/security gates");
 	}
+}
+
+function assertPackagedPackCli(cliPath, projectRoot, installRoot) {
+	const packPath = join(projectRoot, "paveda-pack.tgz");
+	const built = parseJson(
+		runCli(cliPath, ["pack", "build", "--cwd", projectRoot, "--out", packPath]),
+		"pack build output",
+	);
+	if (
+		built?.ok !== true ||
+		built?.path !== packPath ||
+		!Array.isArray(built?.manifest?.entries) ||
+		!built.manifest.entries.some((entry) => entry?.path === "contracts/contract.json")
+	) {
+		fail("packaged CLI smoke failed: pack build did not create a contract pack");
+	}
+	assertFile(packPath);
+
+	const inspected = parseJson(
+		runCli(cliPath, ["pack", "inspect", packPath]),
+		"pack inspect output",
+	);
+	if (
+		inspected?.ok !== true ||
+		!Array.isArray(inspected?.entries) ||
+		!inspected.entries.some((entry) => entry?.path === "hosts/codex.json")
+	) {
+		fail("packaged CLI smoke failed: pack inspect did not list expected entries");
+	}
+
+	const verified = parseJson(runCli(cliPath, ["pack", "verify", packPath]), "pack verify output");
+	if (verified?.ok !== true || verified?.checkedFiles < 2) {
+		fail("packaged CLI smoke failed: pack verify did not check pack files");
+	}
+
+	const dryRun = parseJson(
+		runCli(cliPath, ["pack", "install", packPath, "--cwd", installRoot]),
+		"pack install dry-run output",
+	);
+	if (
+		dryRun?.ok !== true ||
+		dryRun?.dryRun !== true ||
+		!Array.isArray(dryRun?.changes) ||
+		!dryRun.changes.some(
+			(change) => change?.projectPath === join(installRoot, ".paveda", "contract.json"),
+		) ||
+		existsSync(join(installRoot, ".paveda", "contract.json"))
+	) {
+		fail("packaged CLI smoke failed: pack install dry-run did not report changes safely");
+	}
+
+	const installed = parseJson(
+		runCli(cliPath, ["pack", "install", packPath, "--cwd", installRoot, "--write"]),
+		"pack install write output",
+	);
+	if (installed?.ok !== true || installed?.dryRun !== false) {
+		fail("packaged CLI smoke failed: pack install --write did not succeed");
+	}
+	assertFile(join(installRoot, ".paveda", "contract.json"));
+}
+
+function assertPackagedContractCompiler(cliPath, projectRoot) {
+	writeSmokeContractSource(projectRoot);
+	const sourceOnly = parseJson(
+		runCli(cliPath, ["contract", "validate", "--cwd", projectRoot, "--source-only"]),
+		"contract source-only validate output",
+	);
+	if (sourceOnly?.ok !== true || !Array.isArray(sourceOnly?.outputs)) {
+		fail("packaged CLI smoke failed: contract validate --source-only did not pass");
+	}
+
+	const compiled = parseJson(
+		runCli(cliPath, ["contract", "compile", "--cwd", projectRoot, "--write"]),
+		"contract compile output",
+	);
+	if (
+		compiled?.ok !== true ||
+		compiled?.written !== true ||
+		!compiled.outputs?.some((output) => output?.outputPath === ".paveda/profiles/release.json")
+	) {
+		fail("packaged CLI smoke failed: contract compile did not write canonical JSON");
+	}
+
+	const diff = parseJson(
+		runCli(cliPath, ["contract", "diff-source", "--cwd", projectRoot]),
+		"contract diff-source output",
+	);
+	if (diff?.ok !== true || !diff.entries?.every((entry) => entry?.state === "clean")) {
+		fail("packaged CLI smoke failed: contract diff-source did not report clean output");
+	}
+}
+
+function writeSmokeContractSource(projectRoot) {
+	const sourceRoot = join(projectRoot, ".paveda", "source");
+	mkdirSync(join(sourceRoot, "profiles"), { recursive: true });
+	mkdirSync(join(sourceRoot, "hosts"), { recursive: true });
+	writeFileSync(
+		join(sourceRoot, "contract.yaml"),
+		stringifyYaml(readJson(join(projectRoot, ".paveda", "contract.json"))),
+	);
+	for (const profile of ["fast", "standard", "strict", "release"]) {
+		writeFileSync(
+			join(sourceRoot, "profiles", `${profile}.yaml`),
+			stringifyYaml(readJson(join(projectRoot, ".paveda", "profiles", `${profile}.json`))),
+		);
+	}
+	writeFileSync(
+		join(sourceRoot, "hosts", "codex.yaml"),
+		stringifyYaml(readJson(join(projectRoot, ".paveda", "hosts", "codex.json"))),
+	);
+}
+
+function writeSmokeEvidencePolicy(projectRoot) {
+	writeFileSync(
+		join(projectRoot, ".paveda", "evidence-policy.json"),
+		`${JSON.stringify(
+			{
+				schemaVersion: 1,
+				providers: [
+					{
+						id: "package-unit-provider",
+						kind: "unit_test",
+						phaseId: "unit-test",
+						command: [
+							process.execPath,
+							"-e",
+							"require('node:fs').writeFileSync('package-unit-provider.txt', 'unit provider ok')",
+						],
+						artifactGlobs: ["package-unit-provider.txt"],
+						passExitCodes: [0],
+						failureBehavior: "inconclusive",
+					},
+				],
+			},
+			null,
+			2,
+		)}\n`,
+	);
 }
 
 function assertRenderedHostTextPaths(projectRoot, hostCase) {
@@ -3793,6 +4205,10 @@ function parseJson(output, label) {
 			`could not parse packaged CLI ${label}: ${error instanceof Error ? error.message : error}`,
 		);
 	}
+}
+
+function readJson(path) {
+	return JSON.parse(readFileSync(path, "utf8"));
 }
 
 function assertEventTypes(events, expectedTypes) {

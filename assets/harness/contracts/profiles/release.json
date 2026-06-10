@@ -3,7 +3,7 @@
   "schemaVersion": "1.0.0",
   "contractVersion": "1.0.0",
   "minimumPavedaVersion": "0.1.0",
-  "description": "Release profile declaration. MVP must block before execution and report not_supported_in_mvp.",
+  "description": "Release profile for production handoff. Execution is supported, but release gates must be satisfied with direct evidence.",
   "extends": "strict",
   "scoreThresholds": [
     {
@@ -192,6 +192,177 @@
       },
       "failureBehavior": "block",
       "repairAllowed": false,
+      "releaseOverrideAllowed": false,
+      "metadata": {
+        "riskPolicy": {
+          "requiredSurfaces": [
+            "auth",
+            "payment",
+            "data",
+            "infra",
+            "public-api",
+            "mixed"
+          ],
+          "notRequiredSurfaces": [
+            "docs-only",
+            "ui-only"
+          ]
+        }
+      }
+    },
+    {
+      "id": "adversarial-gate",
+      "phase": "semantic-adversarial-verification",
+      "evidenceKind": "adversarial_review",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "release profile is active",
+      "capability": "risk.review",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "security-gate",
+      "phase": "semantic-adversarial-verification",
+      "evidenceKind": "security_scan",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "release profile is active",
+      "capability": "security.scan",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false,
+      "metadata": {
+        "riskPolicy": {
+          "requiredSurfaces": [
+            "auth",
+            "payment",
+            "data",
+            "infra",
+            "public-api"
+          ],
+          "notRequiredSurfaces": [
+            "docs-only",
+            "ui-only"
+          ]
+        }
+      }
+    },
+    {
+      "id": "release-signoff",
+      "phase": "handoff",
+      "evidenceKind": "manual_decision",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "release profile is active",
+      "capability": "ledger.write",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "full-conformance",
+      "phase": "handoff",
+      "evidenceKind": "host_event",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "release profile is active",
+      "capability": "ledger.write",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "immutable-artifact-retention",
+      "phase": "handoff",
+      "evidenceKind": "trace",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "release profile is active",
+      "capability": "artifact.write",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
       "releaseOverrideAllowed": false
     }
   ],
@@ -223,27 +394,24 @@
       "e2e-gate",
       "coverage-gate",
       "semantic-gate",
-      "risk-gate"
+      "risk-gate",
+      "adversarial-gate",
+      "security-gate",
+      "release-signoff",
+      "full-conformance",
+      "immutable-artifact-retention"
     ],
     "expiryRequired": true
   },
   "notApplicablePolicy": {
-    "allowedTaskTypes": [
-      "docs",
-      "metadata"
-    ],
+    "allowedTaskTypes": [],
     "requiresRationale": true,
     "requiresClassifierReason": true,
     "ambiguousBehavior": "block"
   },
   "releaseSupport": {
-    "status": "not_supported_in_mvp",
+    "status": "supported",
     "suggestedProfile": "strict",
-    "unimplementedGates": [
-      "release-signoff",
-      "full-conformance",
-      "immutable-artifact-retention"
-    ],
-    "blockMessage": "Release profile is declared for compatibility but execution must stop before run start in MVP."
+    "unimplementedGates": []
   }
 }

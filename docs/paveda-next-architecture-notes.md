@@ -31,7 +31,7 @@ contract, ledger, scoring, verification, learning 환경을 제공한다.
 18. Self-learning scope는 `run -> project -> user -> shared pack` 4단계로 나눈다.
 19. 모든 host에서 공통 `Run Ledger Summary`와 `Phase Status`를 제공한다.
 20. 인터뷰를 implementation roadmap까지 계속한 뒤, 마지막에 하나의 design spec으로 문서화한다.
-21. MVP host 범위는 Claude Code와 Codex deep support, Pi와 Hermes shallow support다.
+21. MVP host 범위는 Claude Code와 Codex deep support, Pi와 Hermes shallow support로 시작했다. Phase 2에서 Pi와 Hermes lifecycle capture는 deep support로 승격했다.
 22. 구현 순서는 contract manifest, ledger schema, skill rewrite, adapters, conformance 순서로 간다.
 23. 기존 v1 호환은 고려하지 않고 고도화 리팩토링으로 진행한다.
 24. 기존 CLI 명령도 정리한다.
@@ -47,8 +47,8 @@ contract, ledger, scoring, verification, learning 환경을 제공한다.
 34. `.paveda` 정책/contract/config는 커밋 대상이고, runtime state/ledger/artifacts/learning cache는 기본 ignore다.
 35. Self-learning 결과는 `learning promote`를 통해 reviewable project knowledge로 승격할 수 있다.
 36. Override는 허용하지만 해제가 아니라 감사 가능한 예외로 기록한다. Release profile에서는 일부 override를 금지한다.
-37. MVP에서는 `strict`까지 완성하고, `release`는 schema와 conformance placeholder만 둔다.
-38. MVP에서 `--profile release`는 조용히 `strict`로 downgrade하지 않고 `not-supported-in-mvp`로 early block한다.
+37. MVP에서는 `strict`까지 완성했고, Phase 2에서 `release`를 실행 가능한 profile로 승격했다.
+38. `--profile release`는 조용히 `strict`로 downgrade하지 않는다. 실행은 허용하지만 release gate가 부족하면 verification에서 block한다.
 39. `run_id`를 최상위 불변 식별자로 둔다.
 40. `run_id`는 UUID v7을 사용한다.
 41. MVP는 SQLite 단일 파일을 유지하되 `.paveda/ledger/paveda.db`에 ledger 중심 schema를 새로 설계한다. Raw evidence는 `.paveda/artifacts/<run_id>/`에 둔다.
@@ -88,7 +88,7 @@ contract, ledger, scoring, verification, learning 환경을 제공한다.
 75. Scoring schema는 contract의 metric definition과 profile의 threshold를 분리한다. Metric definition은 산출 방식을, profile threshold는 pass/warn/block/repair 기준을 선언한다.
 76. Score metric `calculation`은 임의 코드나 expression DSL을 허용하지 않고, `calculation.kind` enum으로 제한한다.
 77. Profile `requiredGates`는 `id`, `phase`, `evidenceKind`, `requiredForTaskTypes`, `conditionalWhen`, `capability`, `missingCapabilityBehavior`, `notApplicablePolicy`, `failureBehavior`, `repairAllowed`, `releaseOverrideAllowed`를 포함한다.
-78. Release profile은 MVP에서 실행 불가 상태를 manifest로 표현한다. `releaseSupport.status`는 `not_supported_in_mvp`이고, 실행 요청은 early block한다.
+78. Release profile은 manifest에서 `releaseSupport.status = supported`로 표현한다. 실행 요청은 허용하지만 signoff, full conformance, immutable artifact retention gate를 만족해야 한다.
 79. Ledger schema는 `runs`, `phases`, `phase_events`, `scores`, `evidence`, `artifacts`, `capabilities`, `host_events`, `decisions`, `learning_patterns`, `policy_violations`를 1차 테이블로 둔다.
 80. Contract schema 검증은 JSON Schema validation과 semantic validation을 분리한다. JSON Schema는 shape를 검증하고, semantic validation은 graph, reference, profile consistency를 검증한다.
 81. Claude Code adapter v2는 workflow/loop를 대체하지 않고 hook, generated instruction, skill output contract로 phase/evidence를 capture한다.
@@ -320,12 +320,10 @@ Profiles:
 - `strict`
 - `release`
 
-`/do` 기본 profile은 `strict`다. MVP에서는 `fast`, `standard`, `strict`를 실제 동작 대상으로 삼고,
-`release`는 schema와 conformance placeholder만 둔다.
-사용자가 `--profile release`를 직접 요청하면 조용히 `strict`로 downgrade하지 않고 early block한다.
-실행 결과는 `not-supported-in-mvp`로 중단하고, release profile이 요구하는 미구현 gate 목록,
-현재 사용할 수 있는 가장 강한 profile인 `strict`, `--profile strict` 재실행 명령을 보여준다.
-Conformance에서는 `release: not supported in MVP`로 표시한다.
+`/do` 기본 profile은 `strict`다. 현재 `fast`, `standard`, `strict`, `release`를 실제 동작 대상으로 삼는다.
+사용자가 `--profile release`를 직접 요청하면 조용히 `strict`로 downgrade하지 않는다.
+Release 실행은 run start를 허용하지만 verification에서 release 전용 gate를 모두 요구한다.
+Conformance에서는 release missing-gate block 경로와 full evidence pass 경로를 모두 검증한다.
 
 Profile `requiredGates` gate 필드:
 
@@ -349,20 +347,14 @@ Strict profile 기본값:
 - Required gate failure는 `failureBehavior: "repair_then_block"`이다.
 - Score threshold override는 금지한다.
 
-Release profile placeholder:
+Release profile:
 
-- `releaseSupport.status: "not_supported_in_mvp"`
-- `releaseSupport.reason`: MVP에서 release 실행이 막히는 이유
-- `releaseSupport.unimplementedGates`: release에서 필요한 미구현 gate 목록
+- `releaseSupport.status: "supported"`
+- `releaseSupport.unimplementedGates: []`
 - `releaseSupport.suggestedProfile: "strict"`
-- `releaseSupport.rerunCommand`: strict 재실행 명령 템플릿
-
-MVP에서 `--profile release`가 들어오면 실행 전 다음 정보를 출력하고 block한다.
-
-- `not-supported-in-mvp`
-- release profile이 요구하는 미구현 gate 목록
-- 현재 사용할 수 있는 가장 강한 profile인 `strict`
-- `--profile strict` 재실행 명령
+- `release-signoff`: release signoff metadata 또는 `release.signoff` approve decision 필요
+- `full-conformance`: conformance 완료 host event/evidence 필요
+- `immutable-artifact-retention`: immutable release artifact와 trace evidence 필요
 
 ### Verification Ladder
 
@@ -1047,8 +1039,8 @@ Profile manifest 최소 필드:
 - `releaseSupport`
 
 `releaseSupport`는 profile 실행 가능 여부를 schema로 표현한다.
-MVP의 `release` profile은 존재하지만 실행은 `not-supported-in-mvp`로 early block하므로,
-이 상태를 profile manifest에서 명시해야 한다.
+현재 `release` profile은 실행 가능하므로 profile manifest에서 `status: "supported"`와
+빈 `unimplementedGates`를 명시한다.
 
 확장성은 plugin platform보다 먼저 `capability adapter + contract pack` 구조로 간다.
 
@@ -1148,8 +1140,8 @@ Host declaration 최소 필드:
 - `knownQuirks`
 - `conformanceFixtures`
 
-`supportLevel`은 `deep`, `shallow`, `experimental`, `unsupported` 같은 값으로 host별 구현 깊이를 드러낸다.
-Claude Code와 Codex deep support, Pi와 Hermes shallow support를 같은 schema에서 비교하기 위한 필드다.
+`supportLevel`은 `deep`, `shallow` 값으로 host별 구현 깊이를 드러낸다.
+Claude Code, Codex, Pi, Hermes lifecycle support를 같은 schema에서 비교하기 위한 필드다.
 `lifecycleCapture`는 `hook`, `native`, `wrapper`, `manual` capture mode를 표현한다.
 
 우선순위:
@@ -1359,8 +1351,8 @@ MVP host 범위:
 
 - Claude Code: deep support
 - Codex: deep support
-- Pi: shallow support
-- Hermes: shallow support
+- Pi: deep lifecycle support. `goal.native`, `workflow.native`, `loop.native`는 아직 unsupported
+- Hermes: deep lifecycle support. `goal.native`, `workflow.native`, `loop.native`는 아직 unsupported
 
 Claude Code deep support mapping:
 
@@ -1428,7 +1420,7 @@ PR 1 범위:
 - score metric definition and profile threshold validation tests
 - score calculation kind enum validation tests
 - profile required gate validation tests
-- release profile `not_supported_in_mvp` validation tests
+- release profile support and gate declaration validation tests
 - package asset inclusion tests
 - docs update
 
@@ -1450,7 +1442,7 @@ PR 1 테스트 구조:
 - Score metric definition과 profile threshold validation을 포함한다.
 - Score calculation kind enum validation을 포함한다.
 - Profile required gate validation을 포함한다.
-- Release profile `not_supported_in_mvp` validation을 포함한다.
+- Release profile support and gate declaration validation을 포함한다.
 - Package asset inclusion을 검증한다.
 - Host policy semantics가 독립적으로 커지면 후속 PR에서 `tests/host-policy.test.ts`로 분리한다.
 
@@ -1505,7 +1497,7 @@ PR 2 구현 상태:
 
 PR 3 구현 상태:
 
-- `paveda init --host <host> --write`가 `.paveda/manifest.json`, `.paveda/contract.json`, `.paveda/capabilities.json`, `.paveda/test-policy.json`, `.paveda/profiles/strict.json`, `.paveda/hosts/<host>.json`, `.paveda/.gitignore`, `.paveda/projections/index.json`을 생성한다.
+- `paveda init --host <host> --write`가 `.paveda/manifest.json`, `.paveda/contract.json`, `.paveda/capabilities.json`, `.paveda/test-policy.json`, `.paveda/profiles/*.json`, `.paveda/hosts/<host>.json`, `.paveda/.gitignore`, `.paveda/projections/index.json`을 생성한다.
 - `.paveda/.gitignore`는 runtime state를 commit 대상에서 제외한다: `ledger/`, `artifacts/`, `state/`, `learning/cache/`, `tmp/`.
 - projection index는 host, projection path, projection kind, source manifest hash, source asset hashes, content hash, snapshot path, generator version, drift policy, manual override id를 기록한다.
 - projection snapshot은 `.paveda/projections/snapshots/<host>/`에 저장한다. `paveda projection diff`는 이 snapshot과 현재 host projection을 비교한다.
@@ -1514,24 +1506,28 @@ PR 3 구현 상태:
 - `paveda projection regenerate --host <host> --write`는 packaged Paveda asset에서 host projection을 재생성하고 index를 갱신한다.
 - `paveda projection import --host <host> --path <file> --write`는 명시적으로 선택된 projection 변경을 `.paveda/hosts/<host>/imports/` 아래에 보관하고 expected hash를 갱신한다.
 - `paveda projection approve-override --host <host> --path <file> --reason <text> --expires-at <ISO> --write`는 projection index와 PR 2 ledger `decisions` table에 감사 가능한 예외를 남긴다.
-- `release` profile로 projection execution을 요청하면 `not_supported_in_mvp`로 early block한다. `strict`로 조용히 downgrade하지 않는다.
-- package-level E2E인 `pnpm package:check`는 projection clean status, drift block, diff, import resolution, release early block을 packaged CLI smoke로 검증한다.
-- YAML authoring/normalization, full contract compiler, host-specific generated header/sidecar 세부 구현은 이후 phase로 남긴다.
+- `release` profile projection은 `import`와 `regenerate`를 허용한다. `approve-override`는 release drift resolution에서 금지한다.
+- package-level E2E인 `pnpm package:check`는 projection clean status, drift block, diff, import resolution, release projection regenerate를 packaged CLI smoke로 검증한다.
+- YAML authoring/normalization은 `paveda contract compile`로 구현했다. Source-only validation과 source diff도 CLI로 제공한다.
+- Compiler source hash와 compiled hash는 projection index의 `compiler` metadata에 기록한다.
+- Host-specific generated header/sidecar 세부 구현은 이후 phase로 남긴다.
 
 PR 4 구현 상태:
 
 - `paveda contract validate`는 `.paveda` contract source를 검증한다. AJV로 contract, profile, host declaration, capability entry, 필수 policy file을 확인한다.
 - `paveda contract explain --profile <profile>`은 phase happy path, evidence result, required gate, score threshold, verification ladder, release support를 반환한다.
 - `paveda capabilities --host <host>`는 project override를 먼저 읽고, 없으면 package host declaration을 읽는다.
-- `paveda do`는 UUID v7 ledger run을 만들고, capability snapshot, intake phase event, host handoff event를 기록한다. Codex는 native `goal` handoff를 기록하고, 아직 deep start 지원이 없는 host만 `pending_adapter`로 남긴다.
+- `paveda do`는 UUID v7 ledger run을 만들고, capability snapshot, intake phase event, host handoff event를 기록한다. Codex는 native `goal` handoff를 기록하고, Pi/Hermes는 `hook_lifecycle` handoff를 기록한다. 아직 deep start 지원이 없는 host만 `pending_adapter`로 남긴다.
 - `paveda run <host> -- <native command>`는 native command를 wrapper로 실행한다. command start/end host event, stdout/stderr artifact, command evidence를 기록하고 exit code에 따라 run을 completed/failed로 닫는다.
 - `paveda status --run <id>`는 run, phase events, evidence, artifacts, scores, decisions, policy violations를 반환한다.
 - `paveda evidence --run <id>`는 evidence를 조회한다. `paveda evidence add`는 universal contract evidence result enum으로 evidence를 기록한다.
+- `paveda evidence collect --run <id>`는 `.paveda/evidence-policy.json` 또는 `.paveda/test-policy.json`의 provider를 실행하고 evidence/artifact를 기록한다.
 - `paveda verify --run <id>`는 profile required gate와 recorded evidence를 비교한다. `--write`를 주면 verification score와 blocking policy violation을 ledger에 기록한다.
+- `paveda verify --run <id> --collect`는 검증 전에 provider collection을 수행한다.
 - strict `e2e-gate`가 `code` task type을 포함하도록 수정했다. 따라서 code-changing strict run은 unit/e2e evidence가 모두 필요하다.
-- `release` profile로 `do`, `run`, `verify` 실행을 요청하면 `not_supported_in_mvp`로 early block한다. `strict`로 조용히 downgrade하지 않는다.
+- `release` profile로 `do`, `run`, `verify` 실행을 요청하면 run start는 허용하고, verification은 release gate가 부족하면 block한다. `strict`로 조용히 downgrade하지 않는다.
 - `do`와 `run`은 projection drift가 있으면 run 시작 전에 block한다.
-- package-level E2E인 `pnpm package:check`는 contract validate/explain, capabilities, do, missing-evidence verify block, evidence add, verify pass, status/evidence list, native run wrapper, release early block을 packaged CLI smoke로 검증한다.
+- package-level E2E인 `pnpm package:check`는 contract validate/explain, capabilities, do, missing-evidence verify block, evidence add, verify pass, status/evidence list, native run wrapper, release run start를 packaged CLI smoke로 검증한다.
 - full host adapter `startRun()`, conformance runner, advanced evidence provider는 PR 5 이후로 남긴다.
 
 PR 5 구현 상태:
@@ -1565,10 +1561,18 @@ PR 7 구현 상태:
 - Codex host declaration에 `codex-goal-lifecycle-handoff`, `codex-native-goal-status-mapping` conformance fixture를 추가했다.
 - package-level E2E는 packaged CLI에서 Codex goal handoff를 만들고 `status --run`으로 host/phase event 노출을 검증한다.
 
+PR 7b 구현 상태:
+
+- Pi와 Hermes hook payload를 `hostLifecycle`로 normalize한다. 포함 필드는 host, run id, phase id, event type, normalized status, compact payload다.
+- Pi `tool_result`/`tool_execution_end`와 Hermes `post_tool_call`/`transform_terminal_output` 계열 hook은 Bash command evidence를 기록한다.
+- `paveda do --host pi|hermes`는 `pending_adapter`가 아니라 `native_handoff`를 반환하고, `primitive = hook_lifecycle`을 명시한다.
+- Pi/Hermes host declaration은 `supportLevel = deep`, `hook.lifecycle` supported, `lifecycleCapture.recordsPhaseEvents = true`로 갱신했다. Native goal/workflow/loop는 계속 unsupported다.
+- Pi/Hermes conformance fixture는 lifecycle hook capture와 command evidence import를 검증한다.
+
 MVP에서 구현:
 
 - `fast`, `standard`, `strict` 실제 동작
-- `release`는 schema와 conformance placeholder. 직접 실행 요청 시 `not-supported-in-mvp`로 early block
+- `release`는 실행 가능 profile. Verification은 release signoff, full conformance, immutable artifact retention을 요구
 - `.paveda` 중심 source-of-truth 구조
 - Generated projection drift detection
 - Unit/e2e required gate
@@ -1581,36 +1585,88 @@ PR 8 구현 상태:
 - `paveda learning list|propose|explain|promote|retire`를 추가했다.
 - Learning proposal은 `learning_patterns` ledger table에 기록하고, `promoted` 또는 `retired` 상태로 직접 생성할 수 없다.
 - `candidate`와 `validated` learning은 run evidence 연결을 요구한다.
-- Promotion은 MVP에서 project scope만 허용한다. `validated` 상태, confidence `>= 0.9`, evidence id, `successfulRuns >= 3` 또는 `manualValidation = true`, evidence audit pass, 사용자 승인 값을 모두 요구한다.
+- Promotion은 scope-aware policy를 따른다. Project scope는 `validated` 상태, confidence
+  `>= 0.9`, evidence id, `successfulRuns >= 3` 또는 `manualValidation = true`,
+  evidence audit pass, 사용자 승인 값을 요구한다. User/shared scope는 confidence `>= 0.95`,
+  evidence audit, redaction pass, conformance pass, reviewer approval을 요구한다.
 - Learning policy는 unit/e2e gate, score threshold, required evidence, release restriction을 skip/bypass/disable/waive/relax하려는 pattern을 거부한다.
 - `paveda learning promote --write`는 `.paveda/learning/patterns.json`에 promoted project knowledge를 기록한다.
+- `paveda learning promote --scope user --write`는 `~/.paveda/learning/patterns.json`에
+  promoted user knowledge를 기록한다.
+- `paveda learning promote --scope shared --write`는
+  `.paveda/learning/shared-candidates.json`에 shared candidate를 기록한다.
+- `paveda learning export-shared`와 `paveda learning import-shared`는 reviewed shared
+  learning candidate를 파일로 내보내고 가져온다.
 - `paveda learning retire --write`는 promoted ledger row만 기준으로 `patterns.json`을 다시 써서 retired pattern이 active knowledge로 남지 않게 한다.
-- package-level E2E는 packaged CLI에서 propose, promote, explain, knowledge file write, retire, active knowledge removal을 검증한다.
+- package-level E2E는 packaged CLI에서 propose, promote, explain, knowledge file write,
+  shared export/import, retire, active knowledge removal을 검증한다.
 
 PR 9 구현 상태:
 
 - `paveda conformance --host claude-code|codex|pi|hermes`를 추가했다.
 - Conformance는 기본적으로 `/tmp` 아래 isolated fixture project에서 실행하므로 호출자의 repository를 조용히 변경하지 않는다.
 - Host declaration의 `conformanceFixtures[]`가 runner 입력이다. 모르는 fixture id는 무시하지 않고 fail 처리한다.
-- 공통 fixture는 strict code-changing unit/e2e block, docs-only audited `not_applicable`, projection drift block, release `not_supported_in_mvp`를 검증한다.
+- 공통 fixture는 strict code-changing unit/e2e block, docs-only audited `not_applicable`, projection drift block, release missing-gate block, full release evidence pass를 검증한다.
 - Claude Code fixture는 lifecycle hook capture와 Bash command evidence import를 검증한다.
 - Codex fixture는 native goal handoff와 native status normalization을 검증한다.
+- Pi fixture는 lifecycle hook capture와 Bash command evidence import를 검증한다.
+- Hermes fixture는 lifecycle hook capture와 Bash command evidence import를 검증한다.
 - package-level E2E는 packaged CLI에서 Codex와 Claude Code conformance를 실행한다.
+
+PR 10 구현 상태:
+
+- `paveda verify`와 `paveda conformance`는 `--report-json`, `--report-junit`,
+  `--report-dir`로 CI용 normalized JSON 및 JUnit-like XML report를 생성한다.
+- Verification report는 gate와 ladder step을 testcase로 표현한다. `block`은 JUnit
+  failure type으로 유지되어 일반 failure와 구분된다.
+- Conformance report는 host fixture별 testcase를 생성한다.
+- Package-level E2E는 실패하는 `verify` report와 성공하는 `conformance` report 생성을
+  packaged CLI smoke로 검증한다.
+
+PR 11 구현 상태:
+
+- `paveda pack build --cwd <path> --out <tgz>`는 `.paveda` contract/profile/host/evidence/
+  learning/risk-rule 파일을 deterministic shared pack으로 묶는다.
+- Pack archive는 `paveda-pack.json`, `checksums.json`, `contracts/`, `hosts/`, optional
+  `learning/`, `evidence-providers/`, `risk-rules/` entries를 포함한다.
+- `paveda pack inspect`, `paveda pack verify`, `paveda pack install`을 추가했다.
+- `pack install`은 기본 dry-run diff를 반환하고 `--write`에서만 target `.paveda` 파일을 갱신한다.
+- package-level E2E는 packaged CLI에서 pack build/inspect/verify/install을 검증한다.
+
+PR 12 구현 상태:
+
+- `src/progress/index.ts`는 run status, current phase, latest host event, gate status,
+  evidence gap, next command를 stable progress schema로 정규화한다.
+- `paveda status --run <id>`는 기존 ledger summary에 `progress`를 포함한다.
+- `paveda status --run <id> --format markdown`, `paveda progress --run <id> [--watch]`,
+  `paveda handoff --run <id> --markdown`을 추가했다.
+- package-level E2E는 blocked run의 next evidence command가 status/progress/handoff
+  output에 노출되는지 검증한다.
+
+PR 13 구현 상태:
+
+- `do`와 `run`은 `--changed-files`, `--risk-surfaces`를 받아 run context에 저장한다.
+- `verifyRun`은 risk surface를 분류해 release `risk-gate`와 `security-gate` 적용 여부를
+  결정한다.
+- Release `risk-gate`는 high-risk/mixed surface에서 required이고, `security-gate`는
+  `auth`, `payment`, `data`, `infra`, `public-api`에서 required다.
+- Release risk review evidence는 `reviewedBy`, `residualRisk`, `riskSurfaces` metadata를 요구한다.
+- `verify --write`는 `risk.surface` decision과 blocked policy violation을 ledger에 남긴다.
+- package-level E2E는 high-risk release task가 risk/security evidence 없이는 block되는지 검증한다.
+
+PR 14 구현 상태:
+
+- Store schema v4는 FTS5 `ledger_search` virtual table을 추가한다.
+- `paveda search --query <text> [--run <id>]`는 evidence, decision, policy violation을 검색한다.
+- `paveda artifacts list --run <id>`와 `paveda artifacts compact --before <duration>
+  [--run <id>] [--write]`를 추가했다.
+- Compact는 기본 dry-run이며 release immutable artifact는 삭제하지 않는다.
+- Compact된 artifact row는 original path/hash/byte length와 compact timestamp를 metadata에 남긴다.
 
 ## Phase 2 이후 항목
 
 MVP 이후 진행할 항목:
 
-- Pi/Hermes deep lifecycle adapter
-- Release profile 완성
-- YAML authoring 지원과 canonical JSON normalization pipeline
-- Advanced evidence providers
-- Broader self-learning promotion automation
-- Shared pack packaging과 distribution
-- CI/JUnit-like output
-- Rich host-specific progress UI
-- Advanced risk/security verification ladder
-- Cross-project/user-level learning promotion
 
 ## Release와 Versioning
 

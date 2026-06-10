@@ -62,13 +62,13 @@
 	},
 	{
 		"eval_id": 4,
-		"eval_name": "do-release-profile-block",
+		"eval_name": "do-release-profile-gates",
 		"prompt": "--profile release prepare release",
 		"assertions": [
 			{
-				"text": "Release profile must block in MVP",
+				"text": "Release profile must require release gates",
 				"type": "contains_section",
-				"pattern": "not_supported_in_mvp"
+				"pattern": "release gate"
 			},
 			{
 				"text": "Release must not silently downgrade to strict",

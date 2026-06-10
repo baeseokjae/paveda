@@ -21,7 +21,8 @@ describe("conformance runner", () => {
 			"codex-goal-lifecycle-handoff",
 			"codex-native-goal-status-mapping",
 			"projection-drift-blocks",
-			"release-not-supported",
+			"release-missing-gates-blocks",
+			"release-full-evidence-passes",
 		]);
 		expect(result.fixtures.map((fixture) => fixture.status)).toEqual([
 			"pass",
@@ -30,8 +31,9 @@ describe("conformance runner", () => {
 			"pass",
 			"pass",
 			"pass",
+			"pass",
 		]);
-	});
+	}, 15_000);
 
 	it("runs Claude Code deep conformance fixtures in isolated projects", () => {
 		const result = runConformance({
@@ -53,7 +55,51 @@ describe("conformance runner", () => {
 				}),
 			]),
 		);
-	});
+	}, 15_000);
+
+	it("runs Pi deep lifecycle conformance fixtures in isolated projects", () => {
+		const result = runConformance({
+			host: "pi",
+			profile: "strict",
+			now: 30_000,
+		});
+
+		expect(result.ok).toBe(true);
+		expect(result.fixtures).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "pi-hook-lifecycle-capture",
+					status: "pass",
+				}),
+				expect.objectContaining({
+					id: "pi-command-evidence",
+					status: "pass",
+				}),
+			]),
+		);
+	}, 15_000);
+
+	it("runs Hermes deep lifecycle conformance fixtures in isolated projects", () => {
+		const result = runConformance({
+			host: "hermes",
+			profile: "strict",
+			now: 40_000,
+		});
+
+		expect(result.ok).toBe(true);
+		expect(result.fixtures).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({
+					id: "hermes-hook-lifecycle-capture",
+					status: "pass",
+				}),
+				expect.objectContaining({
+					id: "hermes-command-evidence",
+					status: "pass",
+				}),
+			]),
+		);
+	}, 15_000);
 
 	it("does not accept harness as a host declaration conformance target", () => {
 		expect(() => runConformance({ host: "harness" })).toThrow(

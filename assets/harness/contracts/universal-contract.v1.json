@@ -1706,7 +1706,12 @@
       "e2e-gate",
       "coverage-gate",
       "semantic-gate",
-      "risk-gate"
+      "risk-gate",
+      "adversarial-gate",
+      "security-gate",
+      "release-signoff",
+      "full-conformance",
+      "immutable-artifact-retention"
     ],
     "expiryRequired": true
   },

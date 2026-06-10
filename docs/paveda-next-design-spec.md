@@ -184,8 +184,8 @@ Profiles:
 - `release`
 
 `/do` defaults to `strict`.
-MVP implements `fast`, `standard`, and `strict`.
-`release` exists as schema and conformance placeholder only.
+Phase 2 implements `fast`, `standard`, `strict`, and `release`.
+`release` is executable, but it requires direct pass evidence for the full release gate set.
 
 Profile manifest fields:
 
@@ -224,12 +224,13 @@ Strict defaults:
 - Required gate failure goes to repair, then block.
 - Score threshold override is not allowed.
 
-Release placeholder:
+Release profile:
 
-- `releaseSupport.status: "not_supported_in_mvp"`
+- `releaseSupport.status: "supported"`
 - `releaseSupport.suggestedProfile: "strict"`
-- running `--profile release` blocks before execution
-- output includes reason, unimplemented gates, suggested profile, and strict rerun command
+- `releaseSupport.unimplementedGates: []`
+- running `--profile release` creates runs normally
+- verification blocks until release signoff, full conformance, and immutable artifact retention evidence are present
 
 ## Evidence
 
@@ -438,8 +439,8 @@ MVP support levels:
 
 - Claude Code: deep
 - Codex: deep
-- Pi: shallow
-- Hermes: shallow
+- Pi: deep lifecycle support; goal/workflow primitives remain unsupported
+- Hermes: deep lifecycle support; goal/workflow primitives remain unsupported
 
 Host adapter responsibilities:
 
@@ -553,7 +554,7 @@ Required fixture coverage:
 - score threshold miss triggers repair/block
 - evidence audit rejects unsupported pass claims
 - projection drift is detected
-- release profile reports `not_supported_in_mvp`
+- release profile blocks missing release gates and passes complete release evidence
 
 ## Self-Learning
 
@@ -632,7 +633,7 @@ PR 3: `.paveda` Init And Projection
 
 PR 3 implementation status:
 
-- `paveda init --host <host> --write` now writes `.paveda/manifest.json`, `.paveda/contract.json`, `.paveda/capabilities.json`, `.paveda/test-policy.json`, `.paveda/profiles/strict.json`, `.paveda/hosts/<host>.json`, `.paveda/.gitignore`, and `.paveda/projections/index.json`.
+- `paveda init --host <host> --write` now writes `.paveda/manifest.json`, `.paveda/contract.json`, `.paveda/capabilities.json`, `.paveda/test-policy.json`, `.paveda/profiles/*.json`, `.paveda/hosts/<host>.json`, `.paveda/.gitignore`, and `.paveda/projections/index.json`.
 - `.paveda/.gitignore` keeps runtime state out of the committed policy surface: `ledger/`, `artifacts/`, `state/`, `learning/cache/`, and `tmp/`.
 - Projection index entries record host, projection path, projection kind, source manifest hash, source asset hashes, content hash, snapshot path, generator version, drift policy, and optional manual override id.
 - Projection snapshots are written under `.paveda/projections/snapshots/<host>/` so `paveda projection diff` can show expected vs current file content without mutating files.
@@ -641,9 +642,13 @@ PR 3 implementation status:
 - `paveda projection regenerate --host <host> --write` regenerates host projections from packaged Paveda assets and refreshes the projection index.
 - `paveda projection import --host <host> --path <file> --write` stores the explicit projection edit under `.paveda/hosts/<host>/imports/`, updates the expected hash, and clears drift.
 - `paveda projection approve-override --host <host> --path <file> --reason <text> --expires-at <ISO> --write` records an audited override in the projection index and in the PR 2 ledger `decisions` table.
-- Release profile projection execution blocks early with `not_supported_in_mvp`; Paveda does not silently downgrade to strict.
-- Current package-level E2E now includes projection smoke: clean status, drift block, diff output, import resolution, and release early block.
-- YAML authoring/normalization, full contract compiler, and host-specific sidecar headers remain out of PR 3.
+- Release profile projection execution supports `import` and `regenerate`; `approve-override` remains forbidden for release drift.
+- Current package-level E2E now includes projection smoke: clean status, drift block, diff output, import resolution, and release projection regeneration.
+- YAML authoring/normalization is now implemented through `paveda contract compile`.
+- `paveda contract validate --source-only` validates `.paveda/source` YAML/JSON without emitting output.
+- `paveda contract diff-source` compares `.paveda/source` with canonical JSON output.
+- Compiler metadata records source and compiled hashes on the projection index.
+- Host-specific sidecar headers remain a later enhancement.
 
 PR 4: CLI Contract Flow
 
@@ -658,16 +663,18 @@ PR 4 implementation status:
 - `paveda contract validate` validates `.paveda` contract source with AJV-backed schema checks for contract, profile, host declaration, capability entries, and required policy files.
 - `paveda contract explain --profile <profile>` returns phase happy path, evidence results, required gates, score thresholds, verification ladder, and release support.
 - `paveda capabilities --host <host>` reads host capability declarations from project overrides first and package declarations second.
-- `paveda do` creates a UUID v7 ledger run, records capability snapshots, and records intake phase events. Codex now records a native `goal` handoff; hosts without deep start support still use `pending_adapter`.
+- `paveda do` creates a UUID v7 ledger run, records capability snapshots, and records intake phase events. Codex records a native `goal` handoff; Pi and Hermes record `hook_lifecycle` handoffs; hosts without deep start support still use `pending_adapter`.
 - `paveda run <host> -- <native command>` wraps a native command, records command start/end host events, stores stdout/stderr artifacts, records command evidence, and completes or fails the run based on exit code.
 - `paveda status --run <id>` returns ledger run summary with phase events, evidence, artifacts, scores, decisions, and policy violations.
 - `paveda evidence --run <id>` lists evidence. `paveda evidence add` records explicit evidence using the same result enum as the universal contract.
+- `paveda evidence collect --run <id>` runs providers from `.paveda/evidence-policy.json` or `.paveda/test-policy.json`, records provider evidence, captures artifacts, and applies redaction status.
 - `paveda verify --run <id>` evaluates profile required gates against recorded evidence. With `--write`, it records verification score and blocking policy violations.
+- `paveda verify --run <id> --collect` runs configured evidence providers before evaluating gates.
 - Strict `e2e-gate` now includes `code` task type, so code-changing strict runs require both unit and e2e evidence.
-- `release` profile execution for `do`, `run`, and `verify` blocks early with `not_supported_in_mvp`; Paveda does not silently downgrade to strict.
+- `release` profile execution for `do`, `run`, and `verify` is supported. Release verification blocks until all release gates pass; Paveda does not silently downgrade to strict.
 - `do` and `run` block before run start when projection drift is present.
-- Package-level E2E now covers contract validate/explain, capabilities, do, missing-evidence verify block, evidence add, verify pass, status/evidence list, native run wrapper, and release early block.
-- Full host adapter `startRun()`, conformance runner, and advanced evidence providers remain out of PR 4.
+- Package-level E2E now covers contract validate/explain, capabilities, do, missing-evidence verify block, evidence add, verify pass, status/evidence list, native run wrapper, and release run start.
+- Full host adapter `startRun()`, conformance runner, and advanced evidence providers were implemented in later Phase 2 follow-up work.
 
 PR 5: `/do` And `/verify` Rewrite
 
@@ -687,7 +694,7 @@ PR 5 implementation status:
 - Docs and metadata/config-only tasks can satisfy test gates with audited `not_applicable` evidence only when rationale, classifier reason, and user approval metadata are present.
 - Strict and release profile manifests now include docs/metadata for unit/e2e gates so non-testable work must record an explicit test non-applicability decision.
 - Package-level E2E now covers code-task `not_applicable` blocking and docs-task audited `not_applicable` pass.
-- Deep host adapter `startRun()`, conformance runner, and advanced evidence providers remain out of PR 5.
+- Deep host lifecycle capture, conformance fixtures, and advanced evidence providers were implemented in later Phase 2 follow-up work.
 
 PR 6: Claude Code Deep Adapter
 
@@ -733,25 +740,74 @@ PR 8 implementation status:
 - Runtime now exposes `paveda learning list|propose|explain|promote|retire`.
 - Learning proposals write to the `learning_patterns` ledger table and cannot be created as `promoted` or `retired` directly.
 - `candidate` and `validated` learning require linked run evidence.
-- Promotion is deliberately strict: project scope only in MVP, state must be `validated`, confidence must be `>= 0.9`, linked evidence is required, metadata must show `successfulRuns >= 3` or `manualValidation = true`, metadata must show evidence audit pass, and a user approval value is required.
+- Promotion is scope-aware: project scope keeps confidence `>= 0.9`, validation support,
+  linked evidence, evidence audit, and user approval. User/shared scopes require confidence
+  `>= 0.95`, evidence audit, redaction pass, conformance pass, and reviewer approval.
 - Learning policy rejects patterns that try to skip, bypass, disable, waive, or relax unit/e2e gates, score thresholds, required evidence, or release restrictions.
 - `paveda learning promote --write` writes promoted project knowledge to `.paveda/learning/patterns.json`.
+- `paveda learning promote --scope user --write` writes promoted user knowledge to
+  `~/.paveda/learning/patterns.json`.
+- `paveda learning promote --scope shared --write` writes shared candidates to
+  `.paveda/learning/shared-candidates.json`.
+- `paveda learning export-shared` and `paveda learning import-shared` move reviewed shared
+  learning candidates between projects.
 - `paveda learning retire --write` rewrites `.paveda/learning/patterns.json` from active promoted ledger rows instead of silently leaving retired patterns active.
 - Package-level E2E now verifies propose, promote, explain, promoted knowledge file write, retire, and active knowledge removal through the packaged CLI.
+
+PR 8b implementation status:
+
+- `paveda pack build --cwd <path> --out <tgz>` builds deterministic shared packs from
+  `.paveda` contract, profile, host, learning, evidence provider, and risk-rule files.
+- `paveda pack inspect`, `paveda pack verify`, and `paveda pack install` expose pack
+  manifest/checksum verification and dry-run install diffs.
+- Pack install mutates target `.paveda` files only with `--write`.
+- Package-level E2E verifies pack build, inspect, verify, dry-run install, and write install
+  through the packaged CLI.
+
+PR 8c implementation status:
+
+- Runtime now exposes a stable run progress schema with current phase, latest host event,
+  gate statuses, evidence gaps, and next commands.
+- `paveda status --run <id>` includes `progress`; `--format markdown` renders the same
+  progress data for host handoff surfaces.
+- `paveda progress --run <id> [--watch]` and `paveda handoff --run <id> --markdown` expose
+  the same summary for JSON and Markdown consumers.
+- Package-level E2E verifies blocked gate next commands through packaged CLI progress output.
+
+PR 8d implementation status:
+
+- Release verification classifies risk surfaces from explicit `riskSurfaces`, `changedFiles`,
+  and task type metadata.
+- Release `risk-gate` is required for high-risk or mixed surfaces. Release `security-gate` is
+  required for `auth`, `payment`, `data`, `infra`, and `public-api`.
+- Low-risk docs/UI surfaces omit these gates and appear as `not_required` in the verification ladder.
+- `verify --write` records a `risk.surface` decision and blocked gate policy violations.
+- Release risk review evidence requires reviewer, residual risk, and covered surfaces metadata.
+
+PR 8e implementation status:
+
+- Store schema v4 adds an FTS5 `ledger_search` virtual table for evidence, decisions, and
+  policy violations.
+- `paveda search --query <text> [--run <id>]` searches ledger evidence/rationale,
+  decisions, and policy violations.
+- `paveda artifacts list --run <id>` lists artifact rows and retention metadata.
+- `paveda artifacts compact --before <duration> [--run <id>] [--write]` compacts old
+  non-release artifact files while preserving release immutable artifacts.
+- Compact metadata preserves original path, hash, byte length, and compact timestamp.
 
 PR 9: Conformance Runner
 
 - add `paveda conformance --host <host>`
 - run declared host conformance fixtures in isolated projects
 - prove Claude Code and Codex deep support fixtures
-- keep release profile execution blocked in MVP
+- keep release profile execution gated by release evidence
 
 PR 9 implementation status:
 
 - Runtime now exposes `paveda conformance --host claude-code|codex|pi|hermes`.
 - Conformance runs use isolated temporary fixture projects and do not mutate the caller's repository by default.
 - Host declaration `conformanceFixtures[]` drives the runner; unknown fixture IDs fail instead of being ignored.
-- Shared fixtures verify strict code-change unit/e2e blocking, docs-only audited `not_applicable`, projection drift blocking, and release `not_supported_in_mvp`.
+- Shared fixtures verify strict code-change unit/e2e blocking, docs-only audited `not_applicable`, projection drift blocking, release missing-gate blocking, and full release evidence pass.
 - Claude Code fixtures verify lifecycle hook capture and Bash command evidence import.
 - Codex fixtures verify native goal handoff capture and native status normalization.
 - Package-level E2E now runs packaged CLI conformance for Codex and Claude Code.
@@ -763,18 +819,18 @@ MVP is accepted when:
 - contract assets validate with `ajv`
 - strict profile blocks code-changing tasks without unit/e2e evidence
 - docs-only changes can pass with audited `not_applicable`
-- release profile blocks with `not-supported-in-mvp`
+- release profile starts normally but blocks verification until release gates pass
 - `.paveda` source-of-truth and projection drift detection work
 - ledger records phases, evidence, scores, artifacts, host events, decisions, and policy violations
-- Claude Code and Codex have deep lifecycle support
-- Pi and Hermes have shallow declarations
-- conformance runs for Claude Code and Codex
+- Claude Code, Codex, Pi, and Hermes have deep lifecycle support
+- Pi and Hermes keep goal/workflow primitives unsupported while lifecycle hooks capture host events and command evidence
+- conformance runs for Claude Code, Codex, Pi, and Hermes
 
 Current MVP acceptance status:
 
 - All listed MVP acceptance items are now implemented in code, assets, CLI, tests, and package-level smoke.
-- `release` remains intentionally non-executable in MVP and blocks with `not_supported_in_mvp`.
-- Pi and Hermes remain shallow support declarations; deep lifecycle adapters are Phase 2 work.
+- `release` is executable and remains stricter than `strict` through release signoff, full conformance, and immutable artifact retention gates.
+- Pi and Hermes lifecycle adapters are implemented with hook event capture and command evidence; native goal/workflow primitives remain unsupported.
 - Unit tests and package-level E2E gates are required for code-changing Paveda work and are part of the verified package check.
 
 ## Versioning

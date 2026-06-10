@@ -11,6 +11,7 @@ import {
 	verifyRun,
 } from "../src/execution/index.js";
 import { initializePaveda } from "../src/init/index.js";
+import { EventStore, resolveStorePath } from "../src/store/index.js";
 
 const tempDirs: string[] = [];
 
@@ -315,17 +316,63 @@ describe("contract-first CLI flow", () => {
 		).toThrow("Projection drift blocks run");
 	});
 
-	it("blocks release profile execution without downgrading to strict", () => {
+	it("executes release profile runs and blocks until release gates pass", () => {
 		const dir = initCodexProject("paveda-contract-release-");
 
-		expect(() =>
-			runHostCommand({
-				cwd: dir,
-				host: "codex",
-				profile: "release",
-				nativeArgs: [process.execPath, "-e", "process.exit(0)"],
-			}),
-		).toThrow("not_supported_in_mvp");
+		const command = runHostCommand({
+			cwd: dir,
+			host: "codex",
+			profile: "release",
+			nativeArgs: [process.execPath, "-e", "process.stdout.write('release-ok')"],
+			now: 11_000,
+		});
+		expect(command.exitCode).toBe(0);
+		expect(command.stdoutArtifact?.metadata).toMatchObject({
+			releaseRetention: {
+				policy: "release",
+				mode: "immutable",
+				immutable: true,
+			},
+		});
+
+		const started = startPavedaDo({
+			cwd: dir,
+			host: "codex",
+			profile: "release",
+			objective: "Release executable behavior",
+			taskType: "code",
+			now: 12_000,
+		});
+		const missing = verifyRun({
+			cwd: dir,
+			runId: started.run.runId,
+			profile: "release",
+			now: 12_100,
+		});
+		expect(missing.ok).toBe(false);
+		expect(missing.gates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "release-signoff", status: "block" }),
+				expect.objectContaining({ id: "full-conformance", status: "block" }),
+				expect.objectContaining({ id: "immutable-artifact-retention", status: "block" }),
+			]),
+		);
+
+		const artifact = writeReleaseArtifact(dir, started.run.runId, 12_200);
+		recordCompleteReleaseEvidence(dir, started.run.runId, artifact.id, 12_300);
+		const passed = verifyRun({
+			cwd: dir,
+			runId: started.run.runId,
+			profile: "release",
+			write: true,
+			now: 12_500,
+		});
+		expect(passed.ok).toBe(true);
+		expect(passed.scoreSummary).toMatchObject({
+			requiredGates: 9,
+			blockedGates: 0,
+			decision: "pass",
+		});
 	});
 });
 
@@ -335,4 +382,109 @@ function initCodexProject(prefix: string): string {
 	initializePaveda({ host: "codex", cwd: dir, skills: ["do"], write: true });
 	expect(existsSync(join(dir, ".paveda", "manifest.json"))).toBe(true);
 	return dir;
+}
+
+function writeReleaseArtifact(cwd: string, runId: string, now: number) {
+	const store = new EventStore(resolveStorePath("project", cwd));
+	try {
+		return store.writeArtifact({
+			runId,
+			kind: "release-trace",
+			fileName: "release-retention.txt",
+			content: "release artifact\n",
+			metadata: {
+				releaseRetention: {
+					policy: "release",
+					mode: "immutable",
+					immutable: true,
+					redactionStatus: "not_required",
+					capturedAt: now,
+				},
+			},
+			createdAt: now,
+		});
+	} finally {
+		store.close();
+	}
+}
+
+function recordCompleteReleaseEvidence(
+	cwd: string,
+	runId: string,
+	artifactId: number,
+	now: number,
+): void {
+	const evidence = [
+		["unit-pass", "unit-test", "unit_test", "pnpm test", 0, null],
+		["e2e-pass", "e2e-test", "e2e_test", "pnpm package:check", 0, null],
+		["coverage-pass", "unit-test", "coverage", "pnpm test -- --coverage", 0, null],
+		["semantic-pass", "semantic-adversarial-verification", "semantic_review", null, null, null],
+		[
+			"risk-pass",
+			"semantic-adversarial-verification",
+			"risk_review",
+			null,
+			null,
+			{ reviewedBy: "release-manager", residualRisk: "low", riskSurfaces: ["mixed"] },
+		],
+		[
+			"adversarial-pass",
+			"semantic-adversarial-verification",
+			"adversarial_review",
+			null,
+			null,
+			null,
+		],
+		[
+			"security-pass",
+			"semantic-adversarial-verification",
+			"security_scan",
+			"pnpm audit",
+			0,
+			{ scanner: "pnpm audit" },
+		],
+		[
+			"release-signoff-pass",
+			"handoff",
+			"manual_decision",
+			null,
+			null,
+			{ releaseSignoff: true, approvedBy: "release-manager" },
+		],
+		[
+			"full-conformance-pass",
+			"handoff",
+			"host_event",
+			null,
+			null,
+			{ conformanceOk: true, fixturesPassed: ["release-missing-gates-blocks"] },
+		],
+		[
+			"immutable-retention-pass",
+			"handoff",
+			"trace",
+			null,
+			null,
+			{ artifactRetention: "immutable" },
+		],
+	] as const;
+	for (const [
+		index,
+		[evidenceId, phaseId, kind, command, exitCode, metadata],
+	] of evidence.entries()) {
+		addRunEvidence({
+			cwd,
+			runId,
+			phaseId,
+			evidenceId,
+			kind,
+			result: "pass",
+			command,
+			exitCode,
+			artifactId: evidenceId === "immutable-retention-pass" ? artifactId : null,
+			rationale: `${kind} passed for release flow test.`,
+			metadata,
+			now: now + index,
+		});
+	}
 }

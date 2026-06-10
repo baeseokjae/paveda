@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, normalize } from "node:path";
@@ -12,9 +12,28 @@ import type {
 } from "../policy/index.js";
 
 const require = createRequire(import.meta.url);
+// node:sqlite is experimental in Node 22+ and emits an ExperimentalWarning to stderr the first
+// time it is loaded. Claude Code's hook runner treats any stderr from a hook as a non-blocking
+// failure, so we drop just that one warning (all other warnings pass through) for the duration of
+// the require, then restore the original emitter. The warning fires synchronously during load.
+const __originalEmitWarning = process.emitWarning.bind(process);
+process.emitWarning = ((warning: unknown, ...rest: unknown[]): void => {
+	const name =
+		warning instanceof Error
+			? warning.name
+			: typeof rest[0] === "string"
+				? rest[0]
+				: (rest[0] as { type?: string } | undefined)?.type;
+	const message = warning instanceof Error ? warning.message : String(warning);
+	if (name === "ExperimentalWarning" && /SQLite is an experimental feature/i.test(message)) {
+		return;
+	}
+	(__originalEmitWarning as (...args: unknown[]) => void)(warning, ...rest);
+}) as typeof process.emitWarning;
 const { DatabaseSync: SqliteDatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
+process.emitWarning = __originalEmitWarning;
 
-export const CURRENT_SCHEMA_VERSION = 3;
+export const CURRENT_SCHEMA_VERSION = 4;
 export const DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const DEFAULT_STORE_OPEN_RETRIES = 8;
 export const DEFAULT_STORE_OPEN_RETRY_DELAY_MS = 100;
@@ -298,6 +317,38 @@ export interface ArtifactRecord {
 	redactionStatus: ArtifactRedactionStatus;
 	metadata: unknown;
 	createdAt: number;
+}
+
+export interface SearchLedgerOptions {
+	query: string;
+	runId?: string;
+	limit?: number;
+}
+
+export interface SearchLedgerResult {
+	type: "evidence" | "decision" | "policy_violation";
+	runId: string;
+	refId: number;
+	snippet: string;
+}
+
+export interface CompactArtifactsOptions {
+	runId?: string;
+	before: number;
+	write?: boolean;
+	now?: number;
+}
+
+export interface CompactArtifactChange {
+	artifact: ArtifactRecord;
+	action: "eligible" | "compacted" | "keep_release" | "already_missing";
+	path: string;
+}
+
+export interface CompactArtifactsResult {
+	ok: boolean;
+	dryRun: boolean;
+	changes: CompactArtifactChange[];
 }
 
 export interface WriteArtifactInput {
@@ -881,6 +932,18 @@ const STORE_MIGRATIONS: readonly StoreMigration[] = [
 				FOREIGN KEY(evidence_id) REFERENCES evidence(id)
 			);
 			CREATE INDEX IF NOT EXISTS idx_policy_violations_run ON policy_violations(run_id, severity, ts);
+		`,
+	},
+	{
+		version: 4,
+		name: "ledger_search_fts",
+		sql: `
+			CREATE VIRTUAL TABLE IF NOT EXISTS ledger_search USING fts5(
+				type,
+				run_id UNINDEXED,
+				ref_id UNINDEXED,
+				body
+			);
 		`,
 	},
 ];
@@ -1872,6 +1935,140 @@ export class EventStore {
 		return rows.map(mapPolicyViolationRow);
 	}
 
+	searchLedger(options: SearchLedgerOptions): SearchLedgerResult[] {
+		assertNonEmptyString(options.query, "Search query");
+		if (options.runId) {
+			assertUuidV7(options.runId, "Run id");
+		}
+		const limit = options.limit ?? 50;
+		assertPositiveInteger(limit, "Search limit");
+		this.refreshLedgerSearchIndex();
+		const query = ftsPhrase(options.query);
+		const rows = (
+			options.runId
+				? this.database
+						.prepare(
+							[
+								"SELECT type, run_id, ref_id, snippet(ledger_search, 3, '[', ']', '...', 12) AS snippet",
+								"FROM ledger_search WHERE ledger_search MATCH ? AND run_id = ? LIMIT ?",
+							].join(" "),
+						)
+						.all(query, options.runId, limit)
+				: this.database
+						.prepare(
+							[
+								"SELECT type, run_id, ref_id, snippet(ledger_search, 3, '[', ']', '...', 12) AS snippet",
+								"FROM ledger_search WHERE ledger_search MATCH ? LIMIT ?",
+							].join(" "),
+						)
+						.all(query, limit)
+		) as Array<{ type: string; run_id: string; ref_id: string; snippet: string }>;
+		return rows.map((row) => ({
+			type: readSearchResultType(row.type),
+			runId: row.run_id,
+			refId: Number(row.ref_id),
+			snippet: row.snippet,
+		}));
+	}
+
+	listArtifactsForRetention(runId?: string): ArtifactRecord[] {
+		if (runId) {
+			return this.listArtifacts(runId);
+		}
+		const rows = this.database
+			.prepare("SELECT * FROM artifacts ORDER BY created_at, id")
+			.all() as ArtifactRow[];
+		return rows.map(mapArtifactRow);
+	}
+
+	compactArtifacts(options: CompactArtifactsOptions): CompactArtifactsResult {
+		if (options.runId) {
+			assertUuidV7(options.runId, "Run id");
+		}
+		assertFiniteTimestamp(options.before, "Artifact compact before timestamp");
+		const now = options.now ?? Date.now();
+		assertFiniteTimestamp(now, "Artifact compact timestamp");
+		const artifacts = this.listArtifactsForRetention(options.runId).filter(
+			(artifact) => artifact.createdAt < options.before,
+		);
+		const artifactRoot = resolveArtifactRoot(this.path);
+		const changes: CompactArtifactChange[] = [];
+		for (const artifact of artifacts) {
+			const path = join(artifactRoot, artifact.relativePath);
+			assertPathDoesNotUseSymlinks(path, "Artifact path");
+			if (isImmutableReleaseArtifact(artifact)) {
+				changes.push({ artifact, action: "keep_release", path });
+				continue;
+			}
+			if (!existsSync(path)) {
+				changes.push({ artifact, action: "already_missing", path });
+				continue;
+			}
+			if (options.write) {
+				rmSync(path, { force: true });
+				this.markArtifactCompacted(artifact, now);
+				changes.push({
+					artifact: this.getArtifact(artifact.id) ?? artifact,
+					action: "compacted",
+					path,
+				});
+			} else {
+				changes.push({ artifact, action: "eligible", path });
+			}
+		}
+		return {
+			ok: true,
+			dryRun: !options.write,
+			changes,
+		};
+	}
+
+	private refreshLedgerSearchIndex(): void {
+		this.database.exec("DELETE FROM ledger_search");
+		this.database.exec(`
+			INSERT INTO ledger_search(type, run_id, ref_id, body)
+			SELECT
+				'evidence',
+				run_id,
+				CAST(id AS TEXT),
+				coalesce(evidence_id, '') || ' ' || kind || ' ' || result || ' ' ||
+					coalesce(command, '') || ' ' || coalesce(rationale, '') || ' ' || coalesce(metadata, '')
+			FROM evidence;
+
+			INSERT INTO ledger_search(type, run_id, ref_id, body)
+			SELECT
+				'decision',
+				run_id,
+				CAST(id AS TEXT),
+				decision_type || ' ' || decision || ' ' || rationale
+			FROM decisions;
+
+			INSERT INTO ledger_search(type, run_id, ref_id, body)
+			SELECT
+				'policy_violation',
+				run_id,
+				CAST(id AS TEXT),
+				policy_id || ' ' || severity || ' ' || message
+			FROM policy_violations;
+		`);
+	}
+
+	private markArtifactCompacted(artifact: ArtifactRecord, compactedAt: number): void {
+		const metadata = {
+			...asMetadataRecord(artifact.metadata),
+			compacted: {
+				at: compactedAt,
+				originalRelativePath: artifact.relativePath,
+				originalSha256: artifact.sha256,
+				originalByteLength: artifact.byteLength,
+			},
+		};
+		this.database
+			.prepare("UPDATE artifacts SET metadata = ? WHERE id = ?")
+			.run(jsonStringifyNullable(metadata), artifact.id);
+		this.touchRun(artifact.runId, compactedAt);
+	}
+
 	schemaVersion(): number {
 		return currentSchemaVersion(this.database);
 	}
@@ -2677,6 +2874,31 @@ function parseJson(value: string): unknown {
 
 function parseNullableJson(value: string | null): unknown {
 	return value === null ? null : JSON.parse(value);
+}
+
+function ftsPhrase(query: string): string {
+	return `"${query.replaceAll('"', '""')}"`;
+}
+
+function readSearchResultType(value: string): SearchLedgerResult["type"] {
+	if (value === "evidence" || value === "decision" || value === "policy_violation") {
+		return value;
+	}
+	throw new Error(`Invalid search result type: ${value}`);
+}
+
+function isImmutableReleaseArtifact(artifact: ArtifactRecord): boolean {
+	const metadata = asMetadataRecord(artifact.metadata);
+	const retention = asMetadataRecord(metadata.releaseRetention);
+	return (
+		retention.policy === "release" && retention.mode === "immutable" && retention.immutable === true
+	);
+}
+
+function asMetadataRecord(value: unknown): Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
 }
 
 function sha256(value: string | Uint8Array): string {

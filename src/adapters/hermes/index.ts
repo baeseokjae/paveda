@@ -23,6 +23,9 @@ export interface HermesHookPayload {
 	session_id?: string;
 	task_id?: string;
 	cwd?: string;
+	paveda_run_id?: string;
+	run_id?: string;
+	tool_use_id?: string;
 	tool_name?: string | null;
 	tool_input?: unknown;
 	tool_response?: unknown;
@@ -37,6 +40,27 @@ export interface HermesHookPayload {
 	message?: string;
 	extra?: unknown;
 	[key: string]: unknown;
+}
+
+export interface NormalizedHermesLifecycleEvent {
+	host: "hermes";
+	runId?: string;
+	phaseId: "intake" | "execute" | "handoff";
+	eventType: string;
+	normalizedStatus: "active" | "completed" | "failed";
+	payload: Record<string, unknown>;
+	evidence?: NormalizedHermesEvidence;
+}
+
+export interface NormalizedHermesEvidence {
+	evidenceId: string;
+	phaseId: string;
+	kind: "command";
+	result: "pass" | "fail" | "inconclusive";
+	command?: string;
+	exitCode?: number;
+	rationale: string;
+	metadata?: Record<string, unknown>;
 }
 
 export function fromHermesHookPayload(
@@ -59,7 +83,7 @@ export function fromHermesHookPayload(
 		lifecycle,
 		matcher,
 		hookName: getHookName(eventName, matcher),
-		payload: normalizePayload(eventName, payload, matcher),
+		payload: normalizePayload(eventName, payload, matcher, env),
 	};
 }
 
@@ -166,6 +190,7 @@ function normalizePayload(
 	eventName: HermesHookEventName,
 	payload: HermesHookPayload,
 	matcher: string,
+	env: NodeJS.ProcessEnv,
 ): Record<string, unknown> {
 	const toolInput = normalizeToolInput(matcher, readToolInput(eventName, payload), payload);
 	const toolResponse = readToolResponse(eventName, payload);
@@ -187,6 +212,7 @@ function normalizePayload(
 	const normalized: Record<string, unknown> = {
 		host: "hermes",
 		hookEventName: eventName,
+		hostLifecycle: normalizeHermesLifecycleEvent(eventName, payload, matcher, env),
 		raw,
 	};
 
@@ -204,6 +230,137 @@ function normalizePayload(
 	}
 
 	return normalized;
+}
+
+export function normalizeHermesLifecycleEvent(
+	eventName: HermesHookEventName,
+	payload: HermesHookPayload,
+	matcher = getMatcher(eventName, payload),
+	env: NodeJS.ProcessEnv = process.env,
+): NormalizedHermesLifecycleEvent {
+	const runId =
+		readNonEmptyString(payload.paveda_run_id) ??
+		readNonEmptyString(payload.run_id) ??
+		readEnvString(env.PAVEDA_RUN_ID);
+	const toolUseId =
+		readNonEmptyString(payload.tool_use_id) ??
+		readNonEmptyString(payload.toolUseId) ??
+		readNonEmptyString(payload.task_id);
+	const toolInput = normalizeToolInput(matcher, readToolInput(eventName, payload), payload);
+	const toolResponse = readToolResponse(eventName, payload);
+	const command = matcher === "Bash" ? readCommand(toolInput) : undefined;
+	const exitCode = isHermesToolAfterEvent(eventName) ? readExitCode(toolResponse) : undefined;
+	const normalizedStatus = readNormalizedStatus(eventName, exitCode);
+	const phaseId = readPhaseId(eventName);
+	const eventType = readEventType(eventName, normalizedStatus);
+	const lifecyclePayload: Record<string, unknown> = {
+		hookEventName: eventName,
+		...(payload.cwd ? { cwd: payload.cwd } : {}),
+		...(matcher !== "session" ? { tool: matcher } : {}),
+		...(toolUseId ? { toolUseId } : {}),
+		...(command ? { command } : {}),
+		...(typeof exitCode === "number" ? { exitCode } : {}),
+	};
+
+	return {
+		host: "hermes",
+		...(runId ? { runId } : {}),
+		phaseId,
+		eventType,
+		normalizedStatus,
+		payload: lifecyclePayload,
+		...(isHermesToolAfterEvent(eventName) && matcher === "Bash"
+			? {
+					evidence: {
+						evidenceId: `hermes-bash-${toolUseId ?? "command"}`,
+						phaseId,
+						kind: "command",
+						result:
+							typeof exitCode === "number" ? (exitCode === 0 ? "pass" : "fail") : "inconclusive",
+						...(command ? { command } : {}),
+						...(typeof exitCode === "number" ? { exitCode } : {}),
+						rationale:
+							typeof exitCode === "number"
+								? "Hermes Bash tool completed with an exit code."
+								: "Hermes Bash tool completed without a parseable exit code.",
+						metadata: { hookEventName: eventName, toolUseId: toolUseId ?? null },
+					},
+				}
+			: {}),
+	};
+}
+
+function isHermesToolAfterEvent(eventName: HermesHookEventName): boolean {
+	return (
+		eventName === "post_tool_call" ||
+		eventName === "post_approval_response" ||
+		eventName === "transform_tool_result" ||
+		eventName === "transform_terminal_output" ||
+		eventName === "subagent_stop"
+	);
+}
+
+function readPhaseId(eventName: HermesHookEventName): NormalizedHermesLifecycleEvent["phaseId"] {
+	if (eventName === "on_session_start") {
+		return "intake";
+	}
+	if (
+		eventName === "on_session_end" ||
+		eventName === "on_session_finalize" ||
+		eventName === "on_session_reset" ||
+		eventName === "post_llm_call" ||
+		eventName === "transform_llm_output"
+	) {
+		return "handoff";
+	}
+	return "execute";
+}
+
+function readEventType(
+	eventName: HermesHookEventName,
+	normalizedStatus: NormalizedHermesLifecycleEvent["normalizedStatus"],
+): string {
+	switch (eventName) {
+		case "on_session_start":
+			return "hermes.session.started";
+		case "pre_llm_call":
+		case "pre_gateway_dispatch":
+			return "hermes.prompt.submitted";
+		case "pre_tool_call":
+		case "pre_approval_request":
+			return "hermes.tool.started";
+		case "post_tool_call":
+		case "post_approval_response":
+		case "subagent_stop":
+		case "transform_tool_result":
+		case "transform_terminal_output":
+			return normalizedStatus === "failed" ? "hermes.tool.failed" : "hermes.tool.completed";
+		case "on_session_end":
+		case "on_session_finalize":
+		case "on_session_reset":
+		case "post_llm_call":
+		case "transform_llm_output":
+			return "hermes.session.completed";
+	}
+}
+
+function readNormalizedStatus(
+	eventName: HermesHookEventName,
+	exitCode: number | undefined,
+): NormalizedHermesLifecycleEvent["normalizedStatus"] {
+	if (
+		eventName === "on_session_start" ||
+		eventName === "pre_llm_call" ||
+		eventName === "pre_gateway_dispatch" ||
+		eventName === "pre_tool_call" ||
+		eventName === "pre_approval_request"
+	) {
+		return "active";
+	}
+	if (typeof exitCode === "number") {
+		return exitCode === 0 ? "completed" : "failed";
+	}
+	return "completed";
 }
 
 function isToolEvent(eventName: HermesHookEventName): boolean {
@@ -302,6 +459,26 @@ function readPrompt(payload: HermesHookPayload): string | undefined {
 	const extra = isRecord(payload.extra) ? payload.extra : {};
 	const userMessage = extra.user_message;
 	return typeof userMessage === "string" ? userMessage : undefined;
+}
+
+function readCommand(value: unknown): string | undefined {
+	return isRecord(value) ? readNonEmptyString(value.command) : undefined;
+}
+
+function readExitCode(value: unknown): number | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const exitCode = value.exit_code ?? value.exitCode ?? value.code;
+	return typeof exitCode === "number" && Number.isInteger(exitCode) ? exitCode : undefined;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function readEnvString(value: string | undefined): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

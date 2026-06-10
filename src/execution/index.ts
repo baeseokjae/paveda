@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { type CodexGoalHandoff, buildCodexGoalHandoff } from "../adapters/codex/index.js";
 import {
 	type ContractValidationResult,
-	assertMvpExecutableProfile,
+	assertExecutableProfile,
 	loadHostCapabilities,
 	loadProfileManifest,
 	parsePavedaProfileValue,
@@ -40,6 +40,16 @@ export type PavedaTaskType =
 	| "mixed"
 	| "command";
 
+export type RiskSurface =
+	| "auth"
+	| "payment"
+	| "data"
+	| "infra"
+	| "public-api"
+	| "ui-only"
+	| "docs-only"
+	| "mixed";
+
 export interface StartPavedaDoOptions {
 	cwd?: string;
 	host?: HostSkillBundleTarget | string;
@@ -47,6 +57,8 @@ export interface StartPavedaDoOptions {
 	objective: string;
 	taskType?: PavedaTaskType | string;
 	acceptanceCriteria?: string[];
+	changedFiles?: string[];
+	riskSurfaces?: RiskSurface[] | string[];
 	dbPath?: string;
 	storeScope?: StoreScope;
 	now?: number;
@@ -68,7 +80,18 @@ export type StartHostNativeResult =
 			status: "pending_adapter";
 			message: string;
 	  }
+	| HookLifecycleHandoff
 	| CodexGoalHandoff;
+
+export interface HookLifecycleHandoff {
+	status: "native_handoff";
+	primitive: "hook_lifecycle";
+	eventType: string;
+	phaseId: "intake";
+	normalizedStatus: "active";
+	message: string;
+	payload: Record<string, unknown>;
+}
 
 export interface RunHostCommandOptions {
 	cwd?: string;
@@ -78,6 +101,8 @@ export interface RunHostCommandOptions {
 	taskType?: PavedaTaskType | string;
 	acceptanceCriteria?: string[];
 	nativeArgs: string[];
+	changedFiles?: string[];
+	riskSurfaces?: RiskSurface[] | string[];
 	dbPath?: string;
 	storeScope?: StoreScope;
 	now?: number;
@@ -107,6 +132,7 @@ export interface AddEvidenceOptions {
 	result: string;
 	command?: string | null;
 	exitCode?: number | null;
+	artifactId?: number | null;
 	rationale?: string | null;
 	metadata?: unknown;
 	dbPath?: string;
@@ -199,6 +225,7 @@ interface RequiredGate {
 		requiresClassifierReason?: unknown;
 		requiresUserApproval?: unknown;
 	};
+	metadata?: unknown;
 }
 
 interface ProfileManifest {
@@ -230,6 +257,17 @@ interface HostCapabilityEntry {
 	source: string;
 }
 
+interface VerifyGateContext {
+	profile: PavedaProfile;
+	evidence: readonly EvidenceRecord[];
+	artifacts: readonly ArtifactRecord[];
+	hostEvents: readonly HostEventRecord[];
+	decisions: readonly DecisionRecord[];
+	taskType: PavedaTaskType;
+	profilePolicy: ProfileNotApplicablePolicy;
+	riskSurfaces: RiskSurface[];
+}
+
 const DEFAULT_HOST: HostSkillBundleTarget = "codex";
 const DEFAULT_TASK_TYPE: PavedaTaskType = "code";
 const SUCCESS_EXIT_CODE = 0;
@@ -238,7 +276,7 @@ export function startPavedaDo(options: StartPavedaDoOptions): StartPavedaDoResul
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const host = options.host ? parseHostSkillBundleTarget(options.host) : DEFAULT_HOST;
 	const profile = parsePavedaProfileValue(options.profile);
-	assertMvpExecutableProfile(profile);
+	assertExecutableProfile(cwd, profile);
 	const taskType = parseTaskType(options.taskType ?? DEFAULT_TASK_TYPE);
 	const validation = requireRunnableContract({ cwd, host, profile });
 	const projectionStatus = requireCleanProjection({ cwd, host });
@@ -248,7 +286,7 @@ export function startPavedaDo(options: StartPavedaDoOptions): StartPavedaDoResul
 	);
 
 	try {
-		const hostNativePrimitive = host === "codex" ? "goal" : "pending_adapter";
+		const hostNativePrimitive = readHostNativePrimitive(host);
 		const run = store.createRun({
 			objective: options.objective,
 			acceptanceCriteria: options.acceptanceCriteria ?? [],
@@ -258,6 +296,8 @@ export function startPavedaDo(options: StartPavedaDoOptions): StartPavedaDoResul
 				taskType,
 				entrypoint: "paveda do",
 				hostNativePrimitive,
+				changedFiles: options.changedFiles ?? [],
+				riskSurfaces: normalizeRiskSurfaces(options.riskSurfaces),
 			},
 			ts: now,
 		});
@@ -343,6 +383,30 @@ function recordHostNativeStart(
 		return handoff;
 	}
 
+	if (input.host === "pi" || input.host === "hermes") {
+		const handoff = buildHookLifecycleHandoff({ ...input, host: input.host });
+		store.appendHostEvent({
+			runId: input.run.runId,
+			host: input.host,
+			eventType: handoff.eventType,
+			normalizedStatus: handoff.normalizedStatus,
+			payload: handoff.payload,
+			ts: input.ts,
+		});
+		store.appendPhaseEvent({
+			runId: input.run.runId,
+			phaseId: handoff.phaseId,
+			eventType: handoff.eventType,
+			status: handoff.normalizedStatus,
+			payload: {
+				host: input.host,
+				...handoff.payload,
+			},
+			ts: input.ts,
+		});
+		return handoff;
+	}
+
 	store.appendHostEvent({
 		runId: input.run.runId,
 		host: input.host,
@@ -359,11 +423,64 @@ function recordHostNativeStart(
 	};
 }
 
+function readHostNativePrimitive(host: HostSkillBundleTarget): string {
+	if (host === "codex") {
+		return "goal";
+	}
+	if (host === "pi" || host === "hermes") {
+		return "hook_lifecycle";
+	}
+	return "pending_adapter";
+}
+
+function buildHookLifecycleHandoff(input: {
+	run: RunRecord;
+	host: "pi" | "hermes";
+	taskType: PavedaTaskType;
+	cwd: string;
+}): HookLifecycleHandoff {
+	return {
+		status: "native_handoff",
+		primitive: "hook_lifecycle",
+		eventType: `${input.host}.lifecycle.handoff.created`,
+		phaseId: "intake",
+		normalizedStatus: "active",
+		message: `${input.host} hook lifecycle handoff recorded. Continue in the host native loop and let Paveda hooks capture phase and evidence events.`,
+		payload: {
+			nativeStatus: "created",
+			primitive: "hook_lifecycle",
+			objective: input.run.objective,
+			acceptanceCriteria: input.run.acceptanceCriteria,
+			taskType: input.taskType,
+			profile: input.run.profile,
+			cwd: input.cwd,
+		},
+	};
+}
+
+function buildCommandArtifactMetadata(
+	profile: PavedaProfile,
+	command: readonly string[],
+	createdAt: number,
+): Record<string, unknown> {
+	const metadata: Record<string, unknown> = { command };
+	if (profile === "release") {
+		metadata.releaseRetention = {
+			policy: "release",
+			mode: "immutable",
+			immutable: true,
+			redactionStatus: "not_required",
+			capturedAt: createdAt,
+		};
+	}
+	return metadata;
+}
+
 export function runHostCommand(options: RunHostCommandOptions): RunHostCommandResult {
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const host = parseHostSkillBundleTarget(options.host);
 	const profile = parsePavedaProfileValue(options.profile);
-	assertMvpExecutableProfile(profile);
+	assertExecutableProfile(cwd, profile);
 	const taskType = parseTaskType(options.taskType ?? "command");
 	if (options.nativeArgs.length === 0) {
 		throw new Error("Missing native command after --");
@@ -385,6 +502,8 @@ export function runHostCommand(options: RunHostCommandOptions): RunHostCommandRe
 				taskType,
 				entrypoint: "paveda run",
 				command: options.nativeArgs,
+				changedFiles: options.changedFiles ?? [],
+				riskSurfaces: normalizeRiskSurfaces(options.riskSurfaces),
 			},
 			ts: now,
 		});
@@ -424,6 +543,7 @@ export function runHostCommand(options: RunHostCommandOptions): RunHostCommandRe
 		const stderr = spawned.error
 			? `${spawned.error.message}\n${spawned.stderr ?? ""}`
 			: (spawned.stderr ?? "");
+		const artifactMetadata = buildCommandArtifactMetadata(profile, options.nativeArgs, endedAt);
 		const stdoutArtifact =
 			stdout.length > 0
 				? store.writeArtifact({
@@ -431,7 +551,7 @@ export function runHostCommand(options: RunHostCommandOptions): RunHostCommandRe
 						kind: "command-stdout",
 						fileName: "stdout.txt",
 						content: stdout,
-						metadata: { command: options.nativeArgs },
+						metadata: artifactMetadata,
 						createdAt: endedAt,
 					})
 				: null;
@@ -442,7 +562,7 @@ export function runHostCommand(options: RunHostCommandOptions): RunHostCommandRe
 						kind: "command-stderr",
 						fileName: "stderr.txt",
 						content: stderr,
-						metadata: { command: options.nativeArgs },
+						metadata: artifactMetadata,
 						createdAt: endedAt,
 					})
 				: null;
@@ -528,6 +648,7 @@ export function addRunEvidence(options: AddEvidenceOptions): EvidenceRecord {
 			result: parseEvidenceResult(options.result),
 			command: options.command ?? null,
 			exitCode: options.exitCode ?? null,
+			artifactId: options.artifactId ?? null,
 			rationale: options.rationale ?? null,
 			metadata: options.metadata,
 			ts: options.now ?? Date.now(),
@@ -587,7 +708,7 @@ export function listRunEvidence(options: {
 export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const profile = parsePavedaProfileValue(options.profile);
-	assertMvpExecutableProfile(profile);
+	assertExecutableProfile(cwd, profile);
 	const store = new EventStore(
 		options.dbPath ?? resolveStorePath(options.storeScope ?? "project", cwd),
 	);
@@ -597,11 +718,24 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 			throw new Error(`Run does not exist: ${options.runId}`);
 		}
 		const taskType = parseTaskType(readTaskType(run));
+		const riskSurfaces = classifyRunRiskSurfaces(run);
 		const evidence = store.listEvidence(run.runId);
+		const artifacts = store.listArtifacts(run.runId);
+		const hostEvents = store.listHostEvents(run.runId);
+		const decisions = store.listDecisions(run.runId);
 		const manifest = loadProfileManifest(cwd, profile);
 		const profilePolicy = readProfileNotApplicablePolicy(manifest);
-		const gates = requiredGatesForTask(manifest, taskType).map((gate) =>
-			verifyGate(gate, evidence, taskType, profilePolicy),
+		const gates = requiredGatesForTask(manifest, taskType, riskSurfaces).map((gate) =>
+			verifyGate(gate, {
+				profile,
+				evidence,
+				artifacts,
+				hostEvents,
+				decisions,
+				taskType,
+				profilePolicy,
+				riskSurfaces,
+			}),
 		);
 		const scoreSummary = summarizeVerificationScore(gates, manifest);
 		const ladder = buildVerificationLadder(manifest, gates, evidence);
@@ -623,6 +757,15 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 						}),
 					)
 			: [];
+		if (options.write) {
+			store.recordDecision({
+				runId: run.runId,
+				decisionType: "risk.surface",
+				decision: riskSurfaces.join(","),
+				rationale: `Risk surfaces classified for ${taskType} task: ${riskSurfaces.join(", ")}`,
+				ts: now,
+			});
+		}
 		const score = options.write
 			? store.recordScore({
 					runId: run.runId,
@@ -714,7 +857,11 @@ function recordCapabilities(
 	}
 }
 
-function requiredGatesForTask(manifest: ProfileManifest, taskType: PavedaTaskType): RequiredGate[] {
+function requiredGatesForTask(
+	manifest: ProfileManifest,
+	taskType: PavedaTaskType,
+	riskSurfaces: readonly RiskSurface[],
+): RequiredGate[] {
 	const gates = Array.isArray(manifest.requiredGates) ? manifest.requiredGates : [];
 	return gates
 		.filter(isRequiredGate)
@@ -722,19 +869,172 @@ function requiredGatesForTask(manifest: ProfileManifest, taskType: PavedaTaskTyp
 			Array.isArray(gate.requiredForTaskTypes)
 				? gate.requiredForTaskTypes.includes(taskType)
 				: false,
-		);
+		)
+		.filter((gate) => gateAppliesToRiskSurfaces(gate, riskSurfaces));
 }
 
-function verifyGate(
+function gateAppliesToRiskSurfaces(
 	gate: RequiredGate,
-	evidence: readonly EvidenceRecord[],
-	taskType: PavedaTaskType,
-	profilePolicy: ProfileNotApplicablePolicy,
-): VerifyGateResult {
+	riskSurfaces: readonly RiskSurface[],
+): boolean {
+	const metadata = asRecord(gate.metadata);
+	const riskPolicy = asRecord(metadata?.riskPolicy);
+	if (!riskPolicy) {
+		return true;
+	}
+	const requiredSurfaces = normalizeRiskSurfaces(riskPolicy.requiredSurfaces);
+	const notRequiredSurfaces = normalizeRiskSurfaces(riskPolicy.notRequiredSurfaces);
+	if (
+		notRequiredSurfaces.length > 0 &&
+		riskSurfaces.every((surface) => notRequiredSurfaces.includes(surface))
+	) {
+		return false;
+	}
+	return requiredSurfaces.length === 0
+		? true
+		: riskSurfaces.some((surface) => requiredSurfaces.includes(surface));
+}
+
+function classifyRunRiskSurfaces(run: RunRecord): RiskSurface[] {
+	const context = asRecord(run.context);
+	const explicit = normalizeRiskSurfaces(context?.riskSurfaces);
+	if (explicit.length > 0) {
+		return uniqueRiskSurfaces(explicit);
+	}
+	const changedFiles = readStringArray(context?.changedFiles);
+	if (changedFiles.length > 0) {
+		return classifyChangedFiles(changedFiles);
+	}
+	const taskType = parseTaskType(readTaskType(run));
+	if (taskType === "docs" || taskType === "metadata") {
+		return ["docs-only"];
+	}
+	if (taskType === "ui") {
+		return ["ui-only"];
+	}
+	if (taskType === "api") {
+		return ["public-api"];
+	}
+	if (taskType === "infra") {
+		return ["infra"];
+	}
+	if (taskType === "data") {
+		return ["data"];
+	}
+	return ["mixed"];
+}
+
+function classifyChangedFiles(files: readonly string[]): RiskSurface[] {
+	const normalized = files.map((file) => file.toLowerCase());
+	if (normalized.every(isDocsPath)) {
+		return ["docs-only"];
+	}
+	const surfaces: RiskSurface[] = [];
+	if (normalized.some((file) => /(^|[/_-])(auth|login|session|oauth|permission|acl)/.test(file))) {
+		surfaces.push("auth");
+	}
+	if (normalized.some((file) => /(payment|billing|checkout|stripe|invoice)/.test(file))) {
+		surfaces.push("payment");
+	}
+	if (
+		normalized.some((file) =>
+			/(migration|schema|database|db\/|sql|prisma|drizzle|model)/.test(file),
+		)
+	) {
+		surfaces.push("data");
+	}
+	if (
+		normalized.some((file) =>
+			/(\.github\/workflows|dockerfile|compose|terraform|k8s|helm|deploy|infra|ci)/.test(file),
+		)
+	) {
+		surfaces.push("infra");
+	}
+	if (normalized.some((file) => /(api|route|controller|openapi|swagger)/.test(file))) {
+		surfaces.push("public-api");
+	}
+	if (surfaces.length === 0 && normalized.every(isUiPath)) {
+		surfaces.push("ui-only");
+	}
+	if (surfaces.length === 0) {
+		surfaces.push("mixed");
+	}
+	if (surfaces.length > 1) {
+		surfaces.push("mixed");
+	}
+	return uniqueRiskSurfaces(surfaces);
+}
+
+function normalizeRiskSurfaces(value: unknown): RiskSurface[] {
+	if (!Array.isArray(value)) {
+		return [];
+	}
+	return value.filter(isRiskSurface);
+}
+
+function uniqueRiskSurfaces(values: readonly RiskSurface[]): RiskSurface[] {
+	return [...new Set(values)];
+}
+
+function isRiskSurface(value: unknown): value is RiskSurface {
+	return (
+		value === "auth" ||
+		value === "payment" ||
+		value === "data" ||
+		value === "infra" ||
+		value === "public-api" ||
+		value === "ui-only" ||
+		value === "docs-only" ||
+		value === "mixed"
+	);
+}
+
+function readStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string")
+		: [];
+}
+
+function isDocsPath(path: string): boolean {
+	return (
+		path.endsWith(".md") ||
+		path.endsWith(".mdx") ||
+		path.endsWith(".txt") ||
+		path.startsWith("docs/") ||
+		path.startsWith("readme") ||
+		path.startsWith("changelog")
+	);
+}
+
+function isUiPath(path: string): boolean {
+	return (
+		path.endsWith(".tsx") ||
+		path.endsWith(".jsx") ||
+		path.endsWith(".css") ||
+		path.endsWith(".scss") ||
+		path.includes("/components/") ||
+		path.includes("/pages/") ||
+		path.includes("/app/")
+	);
+}
+
+function verifyGate(gate: RequiredGate, context: VerifyGateContext): VerifyGateResult {
 	const evidenceKind = String(gate.evidenceKind);
-	const matching = evidence.filter((item) => item.kind === evidenceKind);
+	const matching = context.evidence.filter((item) => item.kind === evidenceKind);
 	const passing = matching.filter((item) => item.result === "pass");
 	if (passing.length > 0) {
+		const releaseDecision = evaluateReleasePassingGate(gate, passing, context);
+		if (!releaseDecision.ok) {
+			return {
+				id: String(gate.id),
+				phase: String(gate.phase),
+				evidenceKind,
+				status: "block",
+				message: releaseDecision.message,
+				evidenceIds: passing.map((item) => item.id),
+				recovery: buildGateRecovery(gate),
+			};
+		}
 		return {
 			id: String(gate.id),
 			phase: String(gate.phase),
@@ -764,8 +1064,8 @@ function verifyGate(
 		const notApplicableDecision = evaluateNotApplicableEvidence(
 			gate,
 			notApplicable,
-			taskType,
-			profilePolicy,
+			context.taskType,
+			context.profilePolicy,
 		);
 		if (!notApplicableDecision.ok) {
 			return {
@@ -797,10 +1097,78 @@ function verifyGate(
 		phase: String(gate.phase),
 		evidenceKind,
 		status: "block",
-		message: `Missing required ${evidenceKind} pass evidence for ${taskType} task.`,
+		message: `Missing required ${evidenceKind} pass evidence for ${context.taskType} task.`,
 		evidenceIds: matching.map((item) => item.id),
 		recovery: buildGateRecovery(gate),
 	};
+}
+
+function evaluateReleasePassingGate(
+	gate: RequiredGate,
+	passing: readonly EvidenceRecord[],
+	context: VerifyGateContext,
+): { ok: boolean; message: string } {
+	if (context.profile !== "release") {
+		return { ok: true, message: "gate does not require release-specific validation" };
+	}
+	const gateId = String(gate.id);
+	if (gateId === "release-signoff") {
+		if (
+			passing.some(hasReleaseSignoffEvidence) ||
+			context.decisions.some(isReleaseSignoffDecision)
+		) {
+			return { ok: true, message: "release signoff is present" };
+		}
+		return {
+			ok: false,
+			message:
+				"release-signoff requires manual_decision pass evidence with releaseSignoff metadata or an approve release.signoff decision.",
+		};
+	}
+	if (gateId === "full-conformance") {
+		if (
+			passing.some(hasFullConformanceEvidence) ||
+			context.hostEvents.some(isConformanceHostEvent)
+		) {
+			return { ok: true, message: "full conformance evidence is present" };
+		}
+		return {
+			ok: false,
+			message:
+				"full-conformance requires host_event pass evidence with conformanceOk metadata or a release conformance host event.",
+		};
+	}
+	if (gateId === "immutable-artifact-retention") {
+		if (passing.some(hasImmutableRetentionEvidence) && context.artifacts.some(isReleaseArtifact)) {
+			return { ok: true, message: "immutable release artifact retention is present" };
+		}
+		return {
+			ok: false,
+			message:
+				"immutable-artifact-retention requires trace pass evidence and at least one immutable release artifact with acceptable redaction status.",
+		};
+	}
+	if (gateId === "risk-gate") {
+		if (passing.some((evidence) => hasRiskReviewEvidence(evidence, context.riskSurfaces))) {
+			return { ok: true, message: "release risk review evidence is present" };
+		}
+		return {
+			ok: false,
+			message:
+				"risk-gate requires risk_review pass evidence with reviewedBy, residualRisk, and riskSurfaces metadata.",
+		};
+	}
+	if (gateId === "security-gate") {
+		if (passing.some(hasSecurityScanEvidence)) {
+			return { ok: true, message: "release security scan evidence is present" };
+		}
+		return {
+			ok: false,
+			message:
+				"security-gate requires security_scan pass evidence from a project-declared security command or scanner metadata.",
+		};
+	}
+	return { ok: true, message: "release gate evidence passed" };
 }
 
 function evaluateNotApplicableEvidence(
@@ -1016,6 +1384,94 @@ function hasUserApproval(evidence: EvidenceRecord): boolean {
 	const approval = (metadata as { userApproval?: unknown; approvedBy?: unknown }).userApproval;
 	const approvedBy = (metadata as { approvedBy?: unknown }).approvedBy;
 	return approval === true || (typeof approvedBy === "string" && approvedBy.trim().length > 0);
+}
+
+function hasReleaseSignoffEvidence(evidence: EvidenceRecord): boolean {
+	const metadata = asRecord(evidence.metadata);
+	if (!metadata) {
+		return false;
+	}
+	const signoff = metadata.releaseSignoff;
+	const approvedBy = metadata.approvedBy;
+	return signoff === true && typeof approvedBy === "string" && approvedBy.trim().length > 0;
+}
+
+function isReleaseSignoffDecision(decision: DecisionRecord): boolean {
+	return (
+		decision.decisionType === "release.signoff" &&
+		decision.decision === "approve" &&
+		decision.override === false
+	);
+}
+
+function hasFullConformanceEvidence(evidence: EvidenceRecord): boolean {
+	const metadata = asRecord(evidence.metadata);
+	if (!metadata || metadata.conformanceOk !== true) {
+		return false;
+	}
+	return Array.isArray(metadata.fixturesPassed) && metadata.fixturesPassed.length > 0;
+}
+
+function hasRiskReviewEvidence(
+	evidence: EvidenceRecord,
+	riskSurfaces: readonly RiskSurface[],
+): boolean {
+	const metadata = asRecord(evidence.metadata);
+	if (!metadata) {
+		return false;
+	}
+	const reviewedBy = metadata.reviewedBy;
+	const residualRisk = metadata.residualRisk;
+	const evidenceSurfaces = normalizeRiskSurfaces(metadata.riskSurfaces);
+	return (
+		typeof reviewedBy === "string" &&
+		reviewedBy.trim().length > 0 &&
+		(residualRisk === "low" || residualRisk === "medium" || residualRisk === "high") &&
+		evidenceSurfaces.length > 0 &&
+		riskSurfaces.every((surface) => surface === "mixed" || evidenceSurfaces.includes(surface))
+	);
+}
+
+function hasSecurityScanEvidence(evidence: EvidenceRecord): boolean {
+	const metadata = asRecord(evidence.metadata);
+	const scanner = metadata?.scanner;
+	return (
+		(typeof evidence.command === "string" && evidence.command.trim().length > 0) ||
+		(typeof scanner === "string" && scanner.trim().length > 0)
+	);
+}
+
+function isConformanceHostEvent(event: HostEventRecord): boolean {
+	const payload = asRecord(event.payload);
+	return (
+		event.eventType === "release.conformance.completed" &&
+		event.normalizedStatus === "completed" &&
+		payload?.conformanceOk === true
+	);
+}
+
+function hasImmutableRetentionEvidence(evidence: EvidenceRecord): boolean {
+	const metadata = asRecord(evidence.metadata);
+	return metadata?.artifactRetention === "immutable" || metadata?.releaseRetention === "immutable";
+}
+
+function isReleaseArtifact(artifact: ArtifactRecord): boolean {
+	if (artifact.redactionStatus === "failed" || artifact.redactionStatus === "pending") {
+		return false;
+	}
+	const metadata = asRecord(artifact.metadata);
+	const retention = asRecord(metadata?.releaseRetention);
+	return (
+		retention?.policy === "release" &&
+		retention?.mode === "immutable" &&
+		retention?.immutable === true &&
+		typeof artifact.sha256 === "string" &&
+		artifact.sha256.length === 64
+	);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
 function isHostCapabilityEntry(value: unknown): value is HostCapabilityEntry {

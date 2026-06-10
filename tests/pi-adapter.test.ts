@@ -43,6 +43,46 @@ describe("Pi adapter", () => {
 		});
 	});
 
+	it("records Pi lifecycle command evidence through runtime dispatch", () => {
+		const store = openTempStore();
+		const run = store.createRun({
+			objective: "Capture Pi command evidence",
+			profile: "strict",
+			host: "pi",
+			ts: 90,
+		});
+		const input = fromPiHookPayload({
+			event_name: "tool_result",
+			session_id: "session-command",
+			cwd: "/repo",
+			paveda_run_id: run.runId,
+			tool_use_id: "unit",
+			toolName: "bash",
+			input: { command: "pnpm test" },
+			result: { exit_code: 0 },
+		});
+
+		const result = dispatchHookEvent(store, { ...input, ts: 100, config: config() });
+
+		expect(result.hostLifecycle).toMatchObject({
+			status: "recorded",
+			hostEvent: {
+				host: "pi",
+				eventType: "pi.tool.completed",
+				normalizedStatus: "completed",
+			},
+			evidence: {
+				evidenceId: "pi-bash-unit",
+				kind: "command",
+				result: "pass",
+				command: "pnpm test",
+				exitCode: 0,
+			},
+		});
+
+		store.close();
+	});
+
 	it("records enforced Pi policy decisions through runtime dispatch", () => {
 		const store = openTempStore();
 		const input = fromPiHookPayload({

@@ -26,8 +26,7 @@ paveda verify --run <run_id> --profile strict --cwd "$PROJECT_ROOT" --write
 
 1. Resolve project root.
 2. Load the `.paveda` manifest, contract source, active profile manifest, and run ledger.
-3. If the requested profile is `release`, stop with `not_supported_in_mvp`; do not downgrade.
-4. Validate generated projections before trusting host-specific files.
+3. Validate generated projections before trusting host-specific files.
 
 ### 2. Read Run Context
 
@@ -66,6 +65,12 @@ For each `requiredGates[]` entry whose `requiredForTaskTypes[]` contains the run
 
 For code-changing tasks, unit and e2e gates must not use `not_applicable`.
 Missing unit/e2e infrastructure blocks and should trigger a setup-sprint decision.
+
+For release profile runs, direct pass evidence is also required for release-only gates:
+
+- `release-signoff`: `manual_decision` evidence with release signoff metadata or an approve `release.signoff` ledger decision.
+- `full-conformance`: `host_event` evidence with conformance completion metadata or a release conformance host event.
+- `immutable-artifact-retention`: `trace` evidence plus at least one immutable release artifact with acceptable redaction status.
 
 ### 4. Build Verification Ladder
 

@@ -6,18 +6,23 @@ import {
 	codexInstall,
 	conformance,
 	contract,
+	contractCompiler,
 	costGuard,
 	destructiveGuard,
+	evidenceProviders,
 	execution,
 	hermesAdapter,
 	hermesInstall,
 	hooks,
 	learning,
 	mcp,
+	pack,
 	piAdapter,
 	piInstall,
 	policy,
+	progress,
 	projection,
+	reporters,
 	sessionContext,
 	testProcessCleanup,
 	toolingEnforce,
@@ -49,9 +54,15 @@ describe("package root exports", () => {
 		expect(typeof piInstall.installPi).toBe("function");
 		expect(typeof mcp.handleMcpRequest).toBe("function");
 		expect(typeof contract.validateContractSource).toBe("function");
+		expect(typeof contractCompiler.compileContractSource).toBe("function");
+		expect(typeof evidenceProviders.collectEvidenceFromProviders).toBe("function");
 		expect(typeof conformance.runConformance).toBe("function");
 		expect(typeof execution.startPavedaDo).toBe("function");
 		expect(typeof learning.promoteLearningPattern).toBe("function");
+		expect(typeof learning.exportSharedLearningPattern).toBe("function");
+		expect(typeof pack.buildPack).toBe("function");
 		expect(typeof projection.checkProjectionStatus).toBe("function");
+		expect(typeof progress.summarizeProgress).toBe("function");
+		expect(typeof reporters.renderJUnit).toBe("function");
 	});
 });

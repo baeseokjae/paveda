@@ -189,6 +189,28 @@ node dist/cli.js skills install-bundle --host pi --write
 node dist/cli.js init --host codex --cwd /path/to/project
 node dist/cli.js init --host codex --cwd /path/to/project --write
 node dist/cli.js init --host claude-code --cwd /path/to/project --cli-path /path/to/paveda/dist/cli.js --write
+node dist/cli.js contract validate --cwd /path/to/project --host codex --profile strict
+node dist/cli.js contract validate --cwd /path/to/project --source-only
+node dist/cli.js contract compile --cwd /path/to/project --write
+node dist/cli.js contract diff-source --cwd /path/to/project
+node dist/cli.js pack build --cwd /path/to/project --out /tmp/paveda-pack.tgz
+node dist/cli.js pack inspect /tmp/paveda-pack.tgz
+node dist/cli.js pack verify /tmp/paveda-pack.tgz
+node dist/cli.js pack install /tmp/paveda-pack.tgz --cwd /path/to/project-copy
+node dist/cli.js pack install /tmp/paveda-pack.tgz --cwd /path/to/project-copy --write
+node dist/cli.js evidence collect --cwd /path/to/project --run <run_id> --kind unit_test
+node dist/cli.js verify --cwd /path/to/project --run <run_id> --profile strict --collect --report-dir /tmp/paveda-reports
+node dist/cli.js status --cwd /path/to/project --run <run_id> --format markdown
+node dist/cli.js progress --cwd /path/to/project --run <run_id> --watch
+node dist/cli.js handoff --cwd /path/to/project --run <run_id> --markdown
+node dist/cli.js search --cwd /path/to/project --run <run_id> --query "security scan"
+node dist/cli.js artifacts list --cwd /path/to/project --run <run_id>
+node dist/cli.js artifacts compact --cwd /path/to/project --run <run_id> --before 30d
+node dist/cli.js artifacts compact --cwd /path/to/project --run <run_id> --before 30d --write
+node dist/cli.js conformance --host codex --profile strict --report-dir /tmp/paveda-conformance
+node dist/cli.js learning promote --id <id> --scope user --approved-by reviewer --write
+node dist/cli.js learning export-shared --id <id> --out /tmp/paveda-shared-learning.json
+node dist/cli.js learning import-shared --path /tmp/paveda-shared-learning.json --reviewed-by reviewer
 node dist/cli.js adoption-report --host codex --cwd /path/to/project
 node dist/cli.js adoption-report --host codex --cwd /path/to/project --runtime-smoke --json
 node dist/cli.js adoption-report --host codex --cwd /path/to/project --policy-cache .harness/policy-cache.json --json
@@ -206,6 +228,28 @@ settings도 함께 병합한다.
 doctor/adoption-report 복구 명령은 현재 실행 중인 CLI 경로를 사용한다.
 `adoption-report`는 같은 검증 흐름을 하나로 묶어 보여준다. 기본은 읽기 전용이고,
 EventStore write path까지 확인하려면 `--runtime-smoke`를 명시한다.
+`contract compile`은 `.paveda/source/contract.yaml`, `.paveda/source/profiles/*.yaml`,
+`.paveda/source/hosts/*.yaml` 또는 JSON source를 canonical `.paveda/*.json` 출력으로
+정규화한다. `contract validate --source-only`는 emit 없이 source를 검증하고,
+`contract diff-source`는 source와 canonical output의 drift를 확인한다.
+`evidence collect`는 `.paveda/evidence-policy.json` 또는 `.paveda/test-policy.json`의
+provider command를 실행해 evidence와 artifact hash/redaction 상태를 ledger에 기록한다.
+`verify --collect`는 검증 전에 provider collection을 먼저 수행한다.
+`verify`와 `conformance`는 `--report-json`, `--report-junit`, `--report-dir`로
+CI용 normalized JSON 및 JUnit-like XML report를 쓸 수 있다.
+`learning promote --scope user|shared`는 project promotion보다 높은 confidence와
+redaction/conformance/reviewer evidence를 요구한다. Shared learning은 `export-shared`와
+`import-shared`로 review된 후보 파일을 주고받는다.
+`pack build`는 `.paveda` contract/profile/host/evidence/learning/risk-rule 파일을
+deterministic `.tgz`로 묶고, `pack install`은 기본 dry-run diff를 반환한 뒤 `--write`에서만
+대상 `.paveda` 파일을 갱신한다.
+`status --run`, `progress`, `handoff`는 phase, latest host event, blocked gate,
+evidence gap, next command를 같은 progress schema로 보여준다.
+Release `risk-gate`와 `security-gate`는 `--changed-files` 또는 `--risk-surfaces`로 분류된
+surface에 따라 요구된다. `auth`, `payment`, `data`, `infra`, `public-api`는 security scan을
+요구하고, high-risk/mixed work는 risk review를 요구한다.
+`search`는 evidence, decisions, policy violations를 FTS index로 찾는다.
+`artifacts compact`는 기본 dry-run이고, release immutable artifact는 삭제하지 않는다.
 `skills status`는 selected/shadowed skill 후보와 router 활성 여부를 보여준다. `--host codex`처럼 host를 지정하면 해당 host skill root의 생성 산출물을 우선 검사한다. `skills install`은 기본 dry-run이며, `--write`를 붙이면 manifest에 선언된 Paveda builtin skill directory 전체를 `.harness/skills/<name>/`로 복사한다.
 `skills install-bundle`은 `assets/harness/manifest.json`에 선언된 core workflow skills 전체 또는 `--skills do,verify`로 지정한 일부를 host별 기본 skill root에 설치한다. Optional skills는 기본 설치에서 제외되며, `--include-optional`로 모두 포함하거나 `--skills docs-writer,review`처럼 명시적으로 선택한다. 기본 target은 `harness=.harness/skills`, `claude-code=.claude/skills`, `codex=.codex/skills`, `pi=.pi/skills`, `hermes=.hermes/skills`다. `--target-root`를 직접 지정하면 상대 경로는 `--cwd` 기준으로 해석되고, 생성된 skill path reference와 Hermes `skills.external_dirs`도 실제 설치 위치를 사용한다. 같은 custom root를 검증하려면 `doctor`, `skills status`, `route`, `adoption-report`에도 동일한 `--target-root`를 전달한다. 설치 시 skill/context/instruction path는 target host에 맞게 렌더링하고, project hook/check extension path는 Paveda 런타임이 실행하는 `.harness/hooks`, `.harness/checks`로 유지한다. instruction과 context modules도 manifest 기준으로 host별 위치에 복사된다. `assets/harness/AGENTS.md`도 host instruction file로 렌더링된다: `harness=.harness/AGENTS.md`, `claude-code=.claude/CLAUDE.md`, `codex=AGENTS.md`, `pi=.pi/AGENTS.md`, `hermes=.hermes/AGENTS.md`. Codex bundle은 각 skill에 `agents/openai.yaml`도 생성하고, Hermes bundle은 `.hermes/config.yaml`의 `skills.external_dirs`에 설치된 skill root를 등록한다.
 `skills enable-router do`도 기본 dry-run이며, `--write`를 붙이면 선택된 `/do` skill의 `SKILL.md` frontmatter에 `router: enabled`와 `ambiguity-required`를 추가한다.

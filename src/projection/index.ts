@@ -215,6 +215,7 @@ interface SourceAssetPaths {
 
 const GENERATOR_VERSION = "paveda.projection.v1";
 const DEFAULT_PROFILE: PavedaProfile = "strict";
+const PAVEDA_PROFILES: PavedaProfile[] = ["fast", "standard", "strict", "release"];
 const CONTRACT_VERSION = "1.0.0";
 const TEXT_EXTENSIONS = new Set([
 	".json",
@@ -243,12 +244,18 @@ export function writePavedaSourceLayout(
 		".paveda/projections/snapshots",
 		".paveda/learning",
 		".paveda/conformance",
+		".paveda/source",
+		".paveda/source/profiles",
+		".paveda/source/hosts",
 	];
 	const manifestPath = join(cwd, ".paveda", "manifest.json");
 	const contractPath = join(cwd, ".paveda", "contract.json");
 	const capabilitiesPath = join(cwd, ".paveda", "capabilities.json");
 	const testPolicyPath = join(cwd, ".paveda", "test-policy.json");
 	const profilePath = join(cwd, ".paveda", "profiles", `${profile}.json`);
+	const profilePaths = PAVEDA_PROFILES.map((item) =>
+		join(cwd, ".paveda", "profiles", `${item}.json`),
+	);
 	const hostDeclarationPath = join(cwd, ".paveda", "hosts", `${options.host}.json`);
 	const gitignorePath = join(cwd, ".paveda", ".gitignore");
 	const writtenFiles = [
@@ -256,7 +263,7 @@ export function writePavedaSourceLayout(
 		formatProjectPath(cwd, contractPath),
 		formatProjectPath(cwd, capabilitiesPath),
 		formatProjectPath(cwd, testPolicyPath),
-		formatProjectPath(cwd, profilePath),
+		...profilePaths.map((path) => formatProjectPath(cwd, path)),
 		formatProjectPath(cwd, hostDeclarationPath),
 		formatProjectPath(cwd, gitignorePath),
 	];
@@ -270,7 +277,12 @@ export function writePavedaSourceLayout(
 
 		writeJsonFile(manifestPath, buildManifest(cwd, options.host, profile, sourceAssets));
 		copyAssetFile(sourceAssets.contract, contractPath);
-		copyAssetFile(sourceAssets.profile, profilePath);
+		for (const profileName of PAVEDA_PROFILES) {
+			copyAssetFile(
+				resolveSourceAssetPaths(options.host, profileName).profile,
+				join(cwd, ".paveda", "profiles", `${profileName}.json`),
+			);
+		}
 		if (sourceAssets.host) {
 			copyAssetFile(sourceAssets.host, hostDeclarationPath);
 		} else {
@@ -414,7 +426,6 @@ export function regenerateProjections(
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const host = parseHostSkillBundleTarget(options.host);
 	const profile = parsePavedaProfile(options.profile);
-	assertReleaseProfileIsSupported(profile);
 	const write = Boolean(options.write);
 	const source = writePavedaSourceLayout({ cwd, host, profile, write });
 	const bundleOptions: InstallHostSkillBundleOptions = {
@@ -445,7 +456,6 @@ export function importProjectionDrift(options: ProjectionImportOptions): Project
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const host = parseHostSkillBundleTarget(options.host);
 	const profile = parsePavedaProfile(options.profile);
-	assertReleaseProfileIsSupported(profile);
 	const projectionPath = normalizeProjectPath(requireProjectionPath(options.path));
 	const index = requireProjectionIndex(cwd);
 	const entry = requireProjectionEntry(index, host, projectionPath);
@@ -499,7 +509,7 @@ export function approveProjectionOverride(
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const host = parseHostSkillBundleTarget(options.host);
 	const profile = parsePavedaProfile(options.profile);
-	assertReleaseProfileIsSupported(profile);
+	assertProjectionOverrideAllowed(profile);
 	const projectionPath = normalizeProjectPath(requireProjectionPath(options.path));
 	const index = requireProjectionIndex(cwd);
 	const entry = requireProjectionEntry(index, host, projectionPath);
@@ -1104,10 +1114,10 @@ function parseOverrideExpiry(value: string | number | undefined, now: number): n
 	return expiresAt;
 }
 
-function assertReleaseProfileIsSupported(profile: PavedaProfile): void {
+function assertProjectionOverrideAllowed(profile: PavedaProfile): void {
 	if (profile === "release") {
 		throw new Error(
-			"Release profile execution is not_supported_in_mvp. Supported MVP execution profiles: fast, standard, strict.",
+			"Release profile does not allow approve-override projection drift resolution. Use import or regenerate.",
 		);
 	}
 }

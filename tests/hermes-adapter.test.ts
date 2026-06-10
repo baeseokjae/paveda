@@ -43,6 +43,46 @@ describe("Hermes adapter", () => {
 		});
 	});
 
+	it("records Hermes lifecycle command evidence through runtime dispatch", () => {
+		const store = openTempStore();
+		const run = store.createRun({
+			objective: "Capture Hermes command evidence",
+			profile: "strict",
+			host: "hermes",
+			ts: 90,
+		});
+		const input = fromHermesHookPayload({
+			hook_event_name: "transform_terminal_output",
+			session_id: "session-command",
+			cwd: "/repo",
+			paveda_run_id: run.runId,
+			tool_use_id: "unit",
+			command: "pnpm test",
+			output: "pass",
+			exit_code: 0,
+		});
+
+		const result = dispatchHookEvent(store, { ...input, ts: 100, config: config() });
+
+		expect(result.hostLifecycle).toMatchObject({
+			status: "recorded",
+			hostEvent: {
+				host: "hermes",
+				eventType: "hermes.tool.completed",
+				normalizedStatus: "completed",
+			},
+			evidence: {
+				evidenceId: "hermes-bash-unit",
+				kind: "command",
+				result: "pass",
+				command: "pnpm test",
+				exitCode: 0,
+			},
+		});
+
+		store.close();
+	});
+
 	it("records enforced Hermes policy decisions through runtime dispatch", () => {
 		const store = openTempStore();
 		const input = fromHermesHookPayload({

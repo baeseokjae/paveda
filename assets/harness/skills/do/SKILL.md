@@ -45,7 +45,7 @@ paveda do --host <host> --profile strict --task-type <task-type> --cwd "$PROJECT
 Rules:
 
 - Default profile is `strict`.
-- `release` profile is declared but not executable in MVP. If requested, stop with `not_supported_in_mvp`; do not downgrade to `strict`.
+- `release` profile is executable, but it must satisfy every release gate; do not downgrade to `strict`.
 - `run_id` is UUID v7 and becomes the evidence key for the whole task.
 - Acceptance criteria should be copied into the run when known.
 - Manifest configuration wins over repo auto-detection. If auto-detection is used, record confidence in the ledger or evidence rationale.

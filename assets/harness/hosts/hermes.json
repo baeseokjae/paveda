@@ -4,12 +4,24 @@
   "declarationVersion": "1.0.0",
   "minimumPavedaVersion": "0.1.0",
   "displayName": "Hermes",
-  "supportLevel": "shallow",
+  "supportLevel": "deep",
   "versionConstraints": {
     "detectedVersionRange": null,
     "minimumHostVersion": null
   },
   "capabilities": [
+    {
+      "id": "hook.lifecycle",
+      "support": "native",
+      "confidence": 0.85,
+      "source": "manifest",
+      "nativePrimitive": "Hermes agent hooks",
+      "limitations": [
+        "goal and workflow primitives remain host-specific and are not replaced by Paveda"
+      ],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
     {
       "id": "wrapper.lifecycle",
       "support": "wrapped",
@@ -115,7 +127,6 @@
     "goal.native",
     "workflow.native",
     "loop.native",
-    "hook.lifecycle",
     "test.coverage",
     "browser.run",
     "semantic.review",
@@ -123,9 +134,9 @@
     "security.scan"
   ],
   "lifecycleCapture": {
-    "strategy": "wrapper",
+    "strategy": "hooks",
     "recordsHostEvents": true,
-    "recordsPhaseEvents": false
+    "recordsPhaseEvents": true
   },
   "projectionTargets": [
     {
@@ -151,6 +162,14 @@
   ],
   "eventMappings": [
     {
+      "hostEvent": "hermes.session.started",
+      "pavedaEvent": "phase.started"
+    },
+    {
+      "hostEvent": "hermes.tool.completed",
+      "pavedaEvent": "evidence.recorded"
+    },
+    {
       "hostEvent": "command.started",
       "pavedaEvent": "phase.started"
     },
@@ -166,13 +185,18 @@
     }
   ],
   "policyConstraints": [
-    "Use shallow wrapper mode until host-native lifecycle primitives are declared."
+    "Use Hermes agent hooks for phase capture; keep goal and workflow primitives host-native."
   ],
   "knownQuirks": [
-    "Strict profile may block if deep review capabilities are required."
+    "Strict profile may block if advanced review capabilities are required."
   ],
   "conformanceFixtures": [
     "code-change-without-tests-blocks",
-    "release-not-supported"
+    "docs-only-not-applicable",
+    "hermes-hook-lifecycle-capture",
+    "hermes-command-evidence",
+    "projection-drift-blocks",
+    "release-missing-gates-blocks",
+    "release-full-evidence-passes"
   ]
 }

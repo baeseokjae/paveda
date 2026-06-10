@@ -8,9 +8,11 @@ import { fromHermesHookPayload } from "./adapters/hermes/index.js";
 import { fromPiHookPayload } from "./adapters/pi/index.js";
 import { runProjectChecks } from "./checks/project-checks.js";
 import { runConformance } from "./conformance/index.js";
+import { compileContractSource, diffContractSource } from "./contract/compiler.js";
 import { explainContract, loadHostCapabilities, validateContractSource } from "./contract/index.js";
 import { loadConfig, parseHookProfile } from "./core/index.js";
 import { formatDoctorReport, runDoctor } from "./doctor/index.js";
+import { collectEvidenceFromProviders } from "./evidence/providers.js";
 import {
 	addRunEvidence,
 	listRunEvidence,
@@ -35,11 +37,14 @@ import { installHermes } from "./install/hermes.js";
 import { installPi } from "./install/pi.js";
 import {
 	explainLearningPattern,
+	exportSharedLearningPattern,
+	importSharedLearningPattern,
 	promoteLearningPattern,
 	proposeLearningPattern,
 	retireLearningPattern,
 } from "./learning/index.js";
 import { serveMcpStdio } from "./mcp/server.js";
+import { buildPack, inspectPack, installPack, verifyPack } from "./pack/index.js";
 import {
 	type AgentEvent,
 	type PolicyDecision,
@@ -54,6 +59,12 @@ import {
 	verifySignedPolicyBundleWithKeyring,
 } from "./policy/index.js";
 import {
+	formatHandoffMarkdown,
+	formatProgressMarkdown,
+	summarizeProgress,
+	summarizeRunWithProgress,
+} from "./progress/index.js";
+import {
 	approveProjectionOverride,
 	checkProjectionStatus,
 	diffProjections,
@@ -61,6 +72,7 @@ import {
 	parsePavedaProfile,
 	regenerateProjections,
 } from "./projection/index.js";
+import { conformanceReport, verificationReport, writeReports } from "./reporters/index.js";
 import { recordRouteDecision, routeSkill } from "./router/index.js";
 import {
 	enableSkillRouter,
@@ -288,11 +300,43 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 		const subcommand = requirePositional(args, 0, "contract command");
 		const contractArgs = args.slice(1);
 		if (subcommand === "validate") {
+			if (contractArgs.includes("--source-only")) {
+				const result = compileContractSource({
+					cwd: readOption(contractArgs, "--cwd"),
+					write: false,
+				});
+				printJson(result);
+				if (!result.ok) {
+					process.exitCode = 1;
+				}
+				return;
+			}
 			const result = validateContractSource({
 				cwd: readOption(contractArgs, "--cwd"),
 				host: readOption(contractArgs, "--host"),
 				profile: parseOptionalPavedaProfile(readOption(contractArgs, "--profile")),
-				includeProjection: !contractArgs.includes("--source-only"),
+				includeProjection: true,
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+		if (subcommand === "compile") {
+			const result = compileContractSource({
+				cwd: readOption(contractArgs, "--cwd"),
+				write: contractArgs.includes("--write"),
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+		if (subcommand === "diff-source") {
+			const result = diffContractSource({
+				cwd: readOption(contractArgs, "--cwd"),
 			});
 			printJson(result);
 			if (!result.ok) {
@@ -322,6 +366,49 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 		return;
 	}
 
+	if (command === "pack") {
+		const subcommand = requirePositional(args, 0, "pack command");
+		const packArgs = args.slice(1);
+		if (subcommand === "build") {
+			printJson(
+				buildPack({
+					cwd: readOption(packArgs, "--cwd"),
+					out: requireOption(packArgs, "--out"),
+				}),
+			);
+			return;
+		}
+		if (subcommand === "inspect") {
+			const result = inspectPack({ path: requirePositional(packArgs, 0, "pack path") });
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+		if (subcommand === "verify") {
+			const result = verifyPack({ path: requirePositional(packArgs, 0, "pack path") });
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+		if (subcommand === "install") {
+			const result = installPack({
+				path: requirePositional(packArgs, 0, "pack path"),
+				cwd: readOption(packArgs, "--cwd"),
+				write: packArgs.includes("--write"),
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
+		throw new Error(`Unknown pack command: ${subcommand}`);
+	}
+
 	if (command === "conformance") {
 		const result = runConformance({
 			cwd: readOption(args, "--cwd"),
@@ -329,6 +416,10 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			profile: parseOptionalPavedaProfile(readOption(args, "--profile")),
 			keepArtifacts: args.includes("--keep-artifacts"),
 		});
+		const reports = maybeWriteReports(conformanceReport(result), args, "conformance");
+		if (reports) {
+			(result as typeof result & { reports: typeof reports }).reports = reports;
+		}
 		printJson(result);
 		if (!result.ok) {
 			process.exitCode = 1;
@@ -345,6 +436,8 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			objective,
 			taskType: readOption(args, "--task-type"),
 			acceptanceCriteria: parseOptionalCommaList(readOption(args, "--acceptance")),
+			changedFiles: parseOptionalCommaList(readOption(args, "--changed-files")),
+			riskSurfaces: parseOptionalCommaList(readOption(args, "--risk-surfaces")),
 			dbPath: readOption(args, "--db"),
 			storeScope: parseStoreScope(readOption(args, "--store-scope")),
 		});
@@ -367,6 +460,8 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			taskType: readOption(runArgs, "--task-type"),
 			acceptanceCriteria: parseOptionalCommaList(readOption(runArgs, "--acceptance")),
 			nativeArgs,
+			changedFiles: parseOptionalCommaList(readOption(runArgs, "--changed-files")),
+			riskSurfaces: parseOptionalCommaList(readOption(runArgs, "--risk-surfaces")),
 			dbPath: readOption(runArgs, "--db"),
 			storeScope: parseStoreScope(readOption(runArgs, "--store-scope")),
 		});
@@ -378,6 +473,14 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 	}
 
 	if (command === "verify") {
+		if (args.includes("--collect")) {
+			collectEvidenceFromProviders({
+				cwd: readOption(args, "--cwd"),
+				runId: requireOption(args, "--run"),
+				dbPath: readOption(args, "--db"),
+				storeScope: parseStoreScope(readOption(args, "--store-scope")),
+			});
+		}
 		const result = verifyRun({
 			cwd: readOption(args, "--cwd"),
 			runId: requireOption(args, "--run"),
@@ -386,6 +489,10 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			dbPath: readOption(args, "--db"),
 			storeScope: parseStoreScope(readOption(args, "--store-scope")),
 		});
+		const reports = maybeWriteReports(verificationReport(result), args, "verify");
+		if (reports) {
+			(result as typeof result & { reports: typeof reports }).reports = reports;
+		}
 		printJson(result);
 		if (!result.ok) {
 			process.exitCode = 1;
@@ -394,6 +501,22 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 	}
 
 	if (command === "evidence") {
+		if (args[0] === "collect") {
+			const evidenceArgs = args.slice(1);
+			const result = collectEvidenceFromProviders({
+				cwd: readOption(evidenceArgs, "--cwd"),
+				runId: requireOption(evidenceArgs, "--run"),
+				kind: readOption(evidenceArgs, "--kind"),
+				providerId: readOption(evidenceArgs, "--provider"),
+				dbPath: readOption(evidenceArgs, "--db"),
+				storeScope: parseStoreScope(readOption(evidenceArgs, "--store-scope")),
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
+			return;
+		}
 		if (args[0] === "add") {
 			const evidenceArgs = args.slice(1);
 			printJson(
@@ -429,14 +552,47 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 	}
 
 	if (command === "status" && args.includes("--run")) {
-		printJson(
-			summarizeRun({
-				cwd: readOption(args, "--cwd"),
-				runId: requireOption(args, "--run"),
-				dbPath: readOption(args, "--db"),
-				storeScope: parseStoreScope(readOption(args, "--store-scope")),
-			}),
-		);
+		const result = summarizeRunWithProgress({
+			cwd: readOption(args, "--cwd"),
+			runId: requireOption(args, "--run"),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+		});
+		if (readOption(args, "--format") === "markdown" || args.includes("--markdown")) {
+			console.log(formatProgressMarkdown(result.progress));
+		} else {
+			printJson(result);
+		}
+		return;
+	}
+
+	if (command === "progress") {
+		const progress = summarizeProgress({
+			cwd: readOption(args, "--cwd"),
+			runId: requireOption(args, "--run"),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+		});
+		if (readOption(args, "--format") === "markdown" || args.includes("--markdown")) {
+			console.log(formatProgressMarkdown(progress));
+		} else {
+			printJson(progress);
+		}
+		return;
+	}
+
+	if (command === "handoff") {
+		const progress = summarizeProgress({
+			cwd: readOption(args, "--cwd"),
+			runId: requireOption(args, "--run"),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+		});
+		if (readOption(args, "--format") === "json" && !args.includes("--markdown")) {
+			printJson(progress);
+		} else {
+			console.log(formatHandoffMarkdown(progress));
+		}
 		return;
 	}
 
@@ -736,6 +892,37 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			return;
 		}
 
+		if (command === "search") {
+			printJson(
+				store.searchLedger({
+					query: requireOption(args, "--query"),
+					runId: readOption(args, "--run"),
+					limit: parseOptionalPositiveInteger(readOption(args, "--limit"), "--limit"),
+				}),
+			);
+			return;
+		}
+
+		if (command === "artifacts") {
+			const subcommand = requirePositional(args, 0, "artifacts command");
+			const artifactArgs = args.slice(1);
+			if (subcommand === "list") {
+				printJson(store.listArtifacts(requireOption(artifactArgs, "--run")));
+				return;
+			}
+			if (subcommand === "compact") {
+				printJson(
+					store.compactArtifacts({
+						runId: readOption(artifactArgs, "--run"),
+						before: parseOptionalSince(requireOption(artifactArgs, "--before"), Date.now()) ?? 0,
+						write: artifactArgs.includes("--write"),
+					}),
+				);
+				return;
+			}
+			throw new Error(`Unknown artifacts command: ${subcommand}`);
+		}
+
 		if (command === "events") {
 			const sessionId = requireOption(args, "--session");
 			printJson(
@@ -857,8 +1044,31 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 						store,
 						cwd,
 						id: parseRequiredPositiveInteger(readOption(args, "--id"), "--id"),
+						scope: parseOptionalLearningScope(readOption(args, "--scope")),
 						approvedBy: requireOption(args, "--approved-by"),
 						write: args.includes("--write"),
+					}),
+				);
+				return;
+			}
+
+			if (subcommand === "export-shared") {
+				printJson(
+					exportSharedLearningPattern({
+						store,
+						id: parseRequiredPositiveInteger(readOption(args, "--id"), "--id"),
+						out: requireOption(args, "--out"),
+					}),
+				);
+				return;
+			}
+
+			if (subcommand === "import-shared") {
+				printJson(
+					importSharedLearningPattern({
+						cwd,
+						path: requireOption(args, "--path"),
+						reviewedBy: requireOption(args, "--reviewed-by"),
 					}),
 				);
 				return;
@@ -957,6 +1167,10 @@ function isStoreBackedCommand(command: string): boolean {
 		command === "export-decisions" ||
 		command === "instincts" ||
 		command === "learning" ||
+		command === "search" ||
+		command === "artifacts" ||
+		command === "progress" ||
+		command === "handoff" ||
 		command === "route" ||
 		command === "hook"
 	);
@@ -970,6 +1184,7 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 	if (command === "status") {
 		parseOptionalSessionStatus(readOption(args, "--status"));
 		parseOptionalSince(readOption(args, "--since"), Date.now());
+		parseOptionalOutputFormat(readOption(args, "--format"));
 		const writePath = readOption(args, "--write");
 		if (writePath) {
 			assertWritePathIsSafe(writePath);
@@ -977,10 +1192,38 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 		return;
 	}
 
+	if (command === "progress" || command === "handoff") {
+		requireOption(args, "--run");
+		parseOptionalOutputFormat(readOption(args, "--format"));
+		return;
+	}
+
 	if (command === "events" || command === "router-trace") {
 		requireOption(args, "--session");
 		parseOptionalSince(readOption(args, "--since"));
 		return;
+	}
+
+	if (command === "search") {
+		requireOption(args, "--query");
+		readOption(args, "--run");
+		parseOptionalPositiveInteger(readOption(args, "--limit"), "--limit");
+		return;
+	}
+
+	if (command === "artifacts") {
+		const subcommand = requirePositional(args, 0, "artifacts command");
+		const artifactArgs = args.slice(1);
+		if (subcommand === "list") {
+			requireOption(artifactArgs, "--run");
+			return;
+		}
+		if (subcommand === "compact") {
+			readOption(artifactArgs, "--run");
+			parseOptionalSince(requireOption(artifactArgs, "--before"), Date.now());
+			return;
+		}
+		throw new Error(`Unknown artifacts command: ${subcommand}`);
 	}
 
 	if (command === "export-decisions") {
@@ -1041,7 +1284,18 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 		}
 		if (subcommand === "promote") {
 			parseRequiredPositiveInteger(readOption(args, "--id"), "--id");
+			parseOptionalLearningScope(readOption(args, "--scope"));
 			requireOption(args, "--approved-by");
+			return;
+		}
+		if (subcommand === "export-shared") {
+			parseRequiredPositiveInteger(readOption(args, "--id"), "--id");
+			requireOption(args, "--out");
+			return;
+		}
+		if (subcommand === "import-shared") {
+			requireOption(args, "--path");
+			requireOption(args, "--reviewed-by");
 			return;
 		}
 		if (subcommand === "retire") {
@@ -1426,6 +1680,35 @@ function parseOptionalJson(value: string | undefined, name: string): unknown {
 	} catch {
 		throw new Error(`${name} must be valid JSON`);
 	}
+}
+
+function parseOptionalOutputFormat(value: string | undefined): "json" | "markdown" | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (value === "json" || value === "markdown") {
+		return value;
+	}
+	throw new Error(`Invalid --format value: ${value}`);
+}
+
+function maybeWriteReports(
+	report: Parameters<typeof writeReports>[0],
+	args: string[],
+	prefix: string,
+): ReturnType<typeof writeReports> | null {
+	const reportJson = readOption(args, "--report-json");
+	const reportJunit = readOption(args, "--report-junit");
+	const reportDir = readOption(args, "--report-dir");
+	if (!reportJson && !reportJunit && !reportDir) {
+		return null;
+	}
+	return writeReports(report, {
+		reportJson,
+		reportJunit,
+		reportDir,
+		prefix,
+	});
 }
 
 function parseOptionalDate(value: string | undefined, name: string): string | undefined {
@@ -2149,20 +2432,32 @@ Hosts:
 Common flow:
   init --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--include-optional] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write] [--force]
   contract validate [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--profile fast|standard|strict|release] [--source-only]
+  contract compile [--cwd path] [--write]
+  contract diff-source [--cwd path]
   contract explain [--cwd path] [--profile fast|standard|strict|release]
-  do [--host claude-code|codex|pi|hermes] [--profile fast|standard|strict|release] [--task-type code|ui|api|data|infra|test|docs|metadata|mixed] [--acceptance a,b] [--cwd path] [--db path] [--store-scope project|user] "task objective"
-  run <host> [--profile fast|standard|strict|release] [--objective text] [--task-type command|code|ui|api|data|infra|test|docs|metadata|mixed] [--acceptance a,b] [--cwd path] [--db path] [--store-scope project|user] -- <native command...>
-  verify --run uuid-v7 [--profile fast|standard|strict|release] [--cwd path] [--write] [--db path] [--store-scope project|user]
-  status --run uuid-v7 [--cwd path] [--db path] [--store-scope project|user]
+  pack build --cwd path --out path.tgz
+  pack inspect path.tgz
+  pack verify path.tgz
+  pack install path.tgz --cwd path [--write]
+  do [--host claude-code|codex|pi|hermes] [--profile fast|standard|strict|release] [--task-type code|ui|api|data|infra|test|docs|metadata|mixed] [--changed-files a,b] [--risk-surfaces auth,payment,data,infra,public-api,ui-only,docs-only,mixed] [--acceptance a,b] [--cwd path] [--db path] [--store-scope project|user] "task objective"
+  run <host> [--profile fast|standard|strict|release] [--objective text] [--task-type command|code|ui|api|data|infra|test|docs|metadata|mixed] [--changed-files a,b] [--risk-surfaces auth,payment,data,infra,public-api,ui-only,docs-only,mixed] [--acceptance a,b] [--cwd path] [--db path] [--store-scope project|user] -- <native command...>
+  verify --run uuid-v7 [--profile fast|standard|strict|release] [--cwd path] [--write] [--collect] [--report-json path] [--report-junit path] [--report-dir path] [--db path] [--store-scope project|user]
+  status --run uuid-v7 [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
+  progress --run uuid-v7 [--watch] [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
+  handoff --run uuid-v7 [--markdown|--format json] [--cwd path] [--db path] [--store-scope project|user]
   evidence --run uuid-v7 [--cwd path] [--db path] [--store-scope project|user]
+  evidence collect --run uuid-v7 [--kind unit_test|coverage|semantic_review|...] [--provider id] [--cwd path] [--db path] [--store-scope project|user]
   evidence add --run uuid-v7 --id id --kind unit_test|e2e_test|command|... --result pass|fail|block|not_applicable|inconclusive [--phase phase] [--command text] [--exit-code n] [--rationale text] [--metadata-json json] [--cwd path] [--db path] [--store-scope project|user]
+  search --query text [--run uuid-v7] [--limit n] [--cwd path] [--db path] [--store-scope project|user]
+  artifacts list --run uuid-v7 [--cwd path] [--db path] [--store-scope project|user]
+  artifacts compact --before 30d [--run uuid-v7] [--write] [--cwd path] [--db path] [--store-scope project|user]
   projection status --host harness|claude-code|codex|pi|hermes [--cwd path] [--path file]
   projection diff --host harness|claude-code|codex|pi|hermes [--cwd path] [--path file]
   projection regenerate --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--profile fast|standard|strict|release] [--write] [--force]
   projection import --host harness|claude-code|codex|pi|hermes --path file [--cwd path] [--profile fast|standard|strict|release] [--reason text] [--write]
   projection approve-override --host harness|claude-code|codex|pi|hermes --path file --reason text --expires-at ISO [--actor name] [--scope project] [--compensating-control text] [--cwd path] [--profile fast|standard|strict|release] [--db path] [--store-scope project|user] [--write]
   capabilities --host harness|claude-code|codex|pi|hermes [--cwd path]
-  conformance --host claude-code|codex|pi|hermes [--profile fast|standard|strict] [--cwd path] [--keep-artifacts]
+  conformance --host claude-code|codex|pi|hermes [--profile fast|standard|strict|release] [--cwd path] [--keep-artifacts] [--report-json path] [--report-junit path] [--report-dir path]
   adoption-report --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--policy-cache path] [--runtime-smoke] [--db path] [--store-scope project|user] [--session id] [--json]
   doctor [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--policy-cache path] [--enforcement] [--json]
   mcp serve [--cwd path] [--db path] [--store-scope project|user] [--session id]
@@ -2196,7 +2491,9 @@ Runtime and reports:
   learning [list] [--run uuid-v7] [--scope project|user|shared] [--state observed|candidate|validated|promoted|retired] [--limit n] [--cwd path] [--db path] [--store-scope project|user]
   learning propose --run uuid-v7 --pattern text --confidence n [--scope project|user|shared] [--state observed|candidate|validated] [--evidence-id n] [--metadata-json json] [--cwd path] [--db path] [--store-scope project|user]
   learning explain --id n [--cwd path] [--db path] [--store-scope project|user]
-  learning promote --id n --approved-by name [--write] [--cwd path] [--db path] [--store-scope project|user]
+  learning promote --id n --approved-by name [--scope project|user|shared] [--write] [--cwd path] [--db path] [--store-scope project|user]
+  learning export-shared --id n --out path [--cwd path] [--db path] [--store-scope project|user]
+  learning import-shared --path path --reviewed-by name [--cwd path] [--db path] [--store-scope project|user]
   learning retire --id n --reason text [--write] [--cwd path] [--db path] [--store-scope project|user]
   hook claude-code|codex|hermes|pi [--cwd path] [--db path] [--store-scope project|user] < payload.json
 

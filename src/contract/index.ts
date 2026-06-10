@@ -191,12 +191,43 @@ export function parsePavedaProfileValue(value: string | undefined): PavedaProfil
 	throw new Error(`Invalid Paveda profile: ${value}`);
 }
 
-export function assertMvpExecutableProfile(profile: PavedaProfile): void {
-	if (profile === "release") {
-		throw new Error(
-			"Release profile execution is not_supported_in_mvp. Supported MVP execution profiles: fast, standard, strict.",
-		);
+export function assertExecutableProfile(cwd: string, profile: PavedaProfile): void {
+	if (profile !== "release") {
+		return;
 	}
+	const manifest = loadProfileManifest(cwd, profile);
+	const releaseSupport = readReleaseSupport(manifest.releaseSupport);
+	if (releaseSupport.status === "supported") {
+		return;
+	}
+	throw new Error(
+		releaseSupport.blockMessage ??
+			`Release profile execution is ${releaseSupport.status}. Suggested executable profile: ${releaseSupport.suggestedProfile}.`,
+	);
+}
+
+function readReleaseSupport(value: unknown): {
+	status: string;
+	suggestedProfile: string;
+	blockMessage?: string;
+} {
+	if (typeof value !== "object" || value === null) {
+		return {
+			status: "not_supported_in_mvp",
+			suggestedProfile: "strict",
+		};
+	}
+	const support = value as {
+		status?: unknown;
+		suggestedProfile?: unknown;
+		blockMessage?: unknown;
+	};
+	return {
+		status: typeof support.status === "string" ? support.status : "not_supported_in_mvp",
+		suggestedProfile:
+			typeof support.suggestedProfile === "string" ? support.suggestedProfile : "strict",
+		...(typeof support.blockMessage === "string" ? { blockMessage: support.blockMessage } : {}),
+	};
 }
 
 function buildValidators(): {

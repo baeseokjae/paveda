@@ -177,19 +177,31 @@ describe("projection index and drift handling", () => {
 		});
 	});
 
-	it("blocks release profile projection execution in MVP", () => {
+	it("allows release import/regenerate but blocks approve-override drift resolution", () => {
 		const dir = mkdtempSync(join(tmpdir(), "paveda-projection-release-"));
 		tempDirs.push(dir);
 		initializePaveda({ host: "codex", cwd: dir, skills: ["do"], write: true });
+		writeFileSync(join(dir, "AGENTS.md"), "release drift\n");
 
 		expect(() =>
-			regenerateProjections({
+			approveProjectionOverride({
 				cwd: dir,
 				host: "codex",
+				path: "AGENTS.md",
 				profile: "release",
+				reason: "Release should not approve drift override",
+				expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
 				write: true,
 			}),
-		).toThrow("not_supported_in_mvp");
+		).toThrow("Release profile does not allow approve-override");
+
+		const regenerated = regenerateProjections({
+			cwd: dir,
+			host: "codex",
+			profile: "release",
+			write: true,
+		});
+		expect(regenerated.status.ok).toBe(true);
 	});
 });
 

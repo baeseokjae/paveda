@@ -273,6 +273,7 @@
     "codex-goal-lifecycle-handoff",
     "codex-native-goal-status-mapping",
     "projection-drift-blocks",
-    "release-not-supported"
+    "release-missing-gates-blocks",
+    "release-full-evidence-passes"
   ]
 }

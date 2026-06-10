@@ -18,6 +18,9 @@ export interface PiHookPayload {
 	session_id?: string;
 	sessionId?: string;
 	cwd?: string;
+	paveda_run_id?: string;
+	run_id?: string;
+	tool_use_id?: string;
 	tool_name?: string;
 	toolName?: string;
 	tool_input?: unknown;
@@ -28,6 +31,27 @@ export interface PiHookPayload {
 	message?: string;
 	event?: unknown;
 	[key: string]: unknown;
+}
+
+export interface NormalizedPiLifecycleEvent {
+	host: "pi";
+	runId?: string;
+	phaseId: "intake" | "execute" | "handoff";
+	eventType: string;
+	normalizedStatus: "active" | "completed" | "failed";
+	payload: Record<string, unknown>;
+	evidence?: NormalizedPiEvidence;
+}
+
+export interface NormalizedPiEvidence {
+	evidenceId: string;
+	phaseId: string;
+	kind: "command";
+	result: "pass" | "fail" | "inconclusive";
+	command?: string;
+	exitCode?: number;
+	rationale: string;
+	metadata?: Record<string, unknown>;
 }
 
 export function fromPiHookPayload(
@@ -56,7 +80,7 @@ export function fromPiHookPayload(
 		lifecycle,
 		matcher,
 		hookName: getHookName(eventName, matcher),
-		payload: normalizePayload(eventName, payload, event, matcher),
+		payload: normalizePayload(eventName, payload, event, matcher, env),
 	};
 }
 
@@ -159,6 +183,7 @@ function normalizePayload(
 	payload: PiHookPayload,
 	event: Record<string, unknown>,
 	matcher: string,
+	env: NodeJS.ProcessEnv,
 ): Record<string, unknown> {
 	const toolInput = normalizeToolInput(matcher, readToolInput(payload, event));
 	const toolResponse = readToolResponse(payload, event);
@@ -180,6 +205,7 @@ function normalizePayload(
 	const normalized: Record<string, unknown> = {
 		host: "pi",
 		hookEventName: eventName,
+		hostLifecycle: normalizePiLifecycleEvent(eventName, payload, event, matcher, env),
 		raw,
 	};
 
@@ -198,6 +224,122 @@ function normalizePayload(
 	}
 
 	return normalized;
+}
+
+export function normalizePiLifecycleEvent(
+	eventName: PiHookEventName,
+	payload: PiHookPayload,
+	event: Record<string, unknown> = {},
+	matcher = getMatcher(eventName, payload, event),
+	env: NodeJS.ProcessEnv = process.env,
+): NormalizedPiLifecycleEvent {
+	const runId =
+		readString(payload, "paveda_run_id") ??
+		readString(payload, "run_id") ??
+		readString(event, "paveda_run_id") ??
+		readString(event, "run_id") ??
+		readEnvString(env.PAVEDA_RUN_ID);
+	const toolUseId =
+		readString(payload, "tool_use_id") ??
+		readString(payload, "toolUseId") ??
+		readString(event, "tool_use_id") ??
+		readString(event, "toolUseId");
+	const toolInput = normalizeToolInput(matcher, readToolInput(payload, event));
+	const toolResponse = readToolResponse(payload, event);
+	const command = matcher === "Bash" ? readCommand(toolInput) : undefined;
+	const exitCode = isPiToolAfterEvent(eventName) ? readExitCode(toolResponse) : undefined;
+	const normalizedStatus = readNormalizedStatus(eventName, exitCode);
+	const phaseId = readPhaseId(eventName);
+	const eventType = readEventType(eventName, normalizedStatus);
+	const cwd = readString(payload, "cwd") ?? readString(event, "cwd");
+	const lifecyclePayload: Record<string, unknown> = {
+		hookEventName: eventName,
+		...(cwd ? { cwd } : {}),
+		...(matcher !== "session" ? { tool: matcher } : {}),
+		...(toolUseId ? { toolUseId } : {}),
+		...(command ? { command } : {}),
+		...(typeof exitCode === "number" ? { exitCode } : {}),
+	};
+
+	return {
+		host: "pi",
+		...(runId ? { runId } : {}),
+		phaseId,
+		eventType,
+		normalizedStatus,
+		payload: lifecyclePayload,
+		...(isPiToolAfterEvent(eventName) && matcher === "Bash"
+			? {
+					evidence: {
+						evidenceId: `pi-bash-${toolUseId ?? "command"}`,
+						phaseId,
+						kind: "command",
+						result:
+							typeof exitCode === "number" ? (exitCode === 0 ? "pass" : "fail") : "inconclusive",
+						...(command ? { command } : {}),
+						...(typeof exitCode === "number" ? { exitCode } : {}),
+						rationale:
+							typeof exitCode === "number"
+								? "Pi Bash tool completed with an exit code."
+								: "Pi Bash tool completed without a parseable exit code.",
+						metadata: { hookEventName: eventName, toolUseId: toolUseId ?? null },
+					},
+				}
+			: {}),
+	};
+}
+
+function isPiToolAfterEvent(eventName: PiHookEventName): boolean {
+	return eventName === "tool_result" || eventName === "tool_execution_end";
+}
+
+function readPhaseId(eventName: PiHookEventName): NormalizedPiLifecycleEvent["phaseId"] {
+	if (eventName === "session_start") {
+		return "intake";
+	}
+	if (eventName === "agent_end" || eventName === "session_shutdown") {
+		return "handoff";
+	}
+	return "execute";
+}
+
+function readEventType(
+	eventName: PiHookEventName,
+	normalizedStatus: NormalizedPiLifecycleEvent["normalizedStatus"],
+): string {
+	switch (eventName) {
+		case "session_start":
+			return "pi.session.started";
+		case "input":
+		case "before_agent_start":
+			return "pi.prompt.submitted";
+		case "tool_call":
+			return "pi.tool.started";
+		case "tool_result":
+		case "tool_execution_end":
+			return normalizedStatus === "failed" ? "pi.tool.failed" : "pi.tool.completed";
+		case "agent_end":
+		case "session_shutdown":
+			return "pi.session.completed";
+	}
+}
+
+function readNormalizedStatus(
+	eventName: PiHookEventName,
+	exitCode: number | undefined,
+): NormalizedPiLifecycleEvent["normalizedStatus"] {
+	if (
+		eventName === "session_start" ||
+		eventName === "input" ||
+		eventName === "before_agent_start" ||
+		eventName === "tool_call"
+	) {
+		return "active";
+	}
+	if (typeof exitCode === "number") {
+		return exitCode === 0 ? "completed" : "failed";
+	}
+	return "completed";
 }
 
 function canonicalToolName(toolName: string): string {
@@ -257,9 +399,25 @@ function readPrompt(payload: PiHookPayload, event: Record<string, unknown>): str
 	);
 }
 
+function readCommand(value: unknown): string | undefined {
+	return isRecord(value) ? readString(value, "command") : undefined;
+}
+
+function readExitCode(value: unknown): number | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const exitCode = value.exit_code ?? value.exitCode ?? value.code;
+	return typeof exitCode === "number" && Number.isInteger(exitCode) ? exitCode : undefined;
+}
+
 function readString(value: Record<string, unknown>, key: string): string | undefined {
 	const candidate = value[key];
 	return typeof candidate === "string" ? candidate : undefined;
+}
+
+function readEnvString(value: string | undefined): string | undefined {
+	return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

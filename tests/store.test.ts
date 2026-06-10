@@ -740,7 +740,7 @@ describe("EventStore", () => {
 				.prepare("SELECT name FROM schema_migrations WHERE version = ?")
 				.get(CURRENT_SCHEMA_VERSION),
 		).toMatchObject({
-			name: "portable_execution_ledger",
+			name: "ledger_search_fts",
 		});
 
 		store.close();

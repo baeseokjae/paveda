@@ -269,6 +269,7 @@
     "code-change-without-tests-blocks",
     "docs-only-not-applicable",
     "projection-drift-blocks",
-    "release-not-supported"
+    "release-missing-gates-blocks",
+    "release-full-evidence-passes"
   ]
 }

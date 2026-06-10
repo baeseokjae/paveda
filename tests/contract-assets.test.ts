@@ -418,36 +418,78 @@ describe("contract assets", () => {
 		);
 
 		const release = profileById("release");
+		const releaseGateIds = release.requiredGates.map((gate) => gate.id).sort();
+		expect(releaseGateIds).toEqual(
+			[
+				"adversarial-gate",
+				"coverage-gate",
+				"e2e-gate",
+				"full-conformance",
+				"immutable-artifact-retention",
+				"release-signoff",
+				"risk-gate",
+				"security-gate",
+				"semantic-gate",
+				"unit-gate",
+			].sort(),
+		);
 		expect(gateById(release, "e2e-gate").requiredForTaskTypes).toContain("code");
+		expect(gateById(release, "release-signoff").evidenceKind).toBe("manual_decision");
+		expect(gateById(release, "full-conformance").evidenceKind).toBe("host_event");
+		expect(gateById(release, "immutable-artifact-retention").evidenceKind).toBe("trace");
 		expect(release.requiredGates.every((gate) => gate.releaseOverrideAllowed === false)).toBe(true);
 		expect(release.requiredGates.every((gate) => gate.failureBehavior === "block")).toBe(true);
 	});
 
-	it("declares release as not supported in MVP without silently downgrading to strict", () => {
+	it("declares release as supported with all release gates implemented", () => {
 		const release = profileById("release");
 
-		expect(release.releaseSupport.status).toBe("not_supported_in_mvp");
+		expect(release.releaseSupport.status).toBe("supported");
 		expect(release.releaseSupport.suggestedProfile).toBe("strict");
-		expect(release.releaseSupport.unimplementedGates).toEqual([
-			"release-signoff",
-			"full-conformance",
-			"immutable-artifact-retention",
-		]);
-		expect(release.releaseSupport.blockMessage).toContain("stop before run start");
+		expect(release.releaseSupport.unimplementedGates).toEqual([]);
+		expect(release.requiredGates.map((gate) => gate.id)).toEqual(
+			expect.arrayContaining([
+				"release-signoff",
+				"full-conformance",
+				"immutable-artifact-retention",
+			]),
+		);
 	});
 
-	it("declares host support levels and shallow-host unsupported capabilities", () => {
+	it("declares host support levels and deep lifecycle unsupported capabilities", () => {
 		expect(hostById("claude-code").supportLevel).toBe("deep");
 		expect(hostById("codex").supportLevel).toBe("deep");
-		expect(hostById("pi").supportLevel).toBe("shallow");
-		expect(hostById("hermes").supportLevel).toBe("shallow");
+		expect(hostById("pi").supportLevel).toBe("deep");
+		expect(hostById("hermes").supportLevel).toBe("deep");
 		expect(hostById("codex").conformanceFixtures).toEqual(
-			expect.arrayContaining(["codex-goal-lifecycle-handoff", "codex-native-goal-status-mapping"]),
+			expect.arrayContaining([
+				"codex-goal-lifecycle-handoff",
+				"codex-native-goal-status-mapping",
+				"release-missing-gates-blocks",
+				"release-full-evidence-passes",
+			]),
+		);
+		expect(hostById("pi").conformanceFixtures).toEqual(
+			expect.arrayContaining([
+				"pi-hook-lifecycle-capture",
+				"pi-command-evidence",
+				"release-missing-gates-blocks",
+				"release-full-evidence-passes",
+			]),
+		);
+		expect(hostById("hermes").conformanceFixtures).toEqual(
+			expect.arrayContaining([
+				"hermes-hook-lifecycle-capture",
+				"hermes-command-evidence",
+				"release-missing-gates-blocks",
+				"release-full-evidence-passes",
+			]),
 		);
 
 		for (const host of [hostById("pi"), hostById("hermes")]) {
 			expect(host.unsupportedCapabilities).toContain("goal.native");
 			expect(host.unsupportedCapabilities).toContain("workflow.native");
+			expect(host.unsupportedCapabilities).not.toContain("hook.lifecycle");
 			expect(host.unsupportedCapabilities).toContain("semantic.review");
 		}
 	});
