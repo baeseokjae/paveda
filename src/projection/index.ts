@@ -787,12 +787,15 @@ function statusEntry(
 			? null
 			: (overrides.find((override) => override.id === entry.manualOverrideId) ?? null);
 	const overrideActive = activeOverride !== null && Date.parse(activeOverride.expiresAt) > now;
+	const overrideMatchesCurrent =
+		activeOverride !== null && currentHash === activeOverride.currentContentHash;
+	const overrideAccepted = overrideActive && overrideMatchesCurrent;
 	const state: ProjectionEntryState =
 		currentHash === null
 			? "missing"
 			: currentHash === entry.contentHash
 				? "clean"
-				: overrideActive
+				: overrideAccepted
 					? "overridden"
 					: "drifted";
 
@@ -800,7 +803,7 @@ function statusEntry(
 		...entry,
 		state,
 		currentHash,
-		override: overrideActive ? activeOverride : null,
+		override: overrideAccepted ? activeOverride : null,
 		recoveryCommands:
 			state === "clean" || state === "overridden"
 				? []
