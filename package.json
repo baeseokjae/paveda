@@ -19,7 +19,7 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.json",
 		"typecheck": "tsc --noEmit",
-		"test": "vitest run",
+		"test": "vitest run --pool=forks --no-file-parallelism",
 		"test:watch": "vitest",
 		"lint": "biome check src tests scripts",
 		"format": "biome format --write src tests scripts",
@@ -46,5 +46,8 @@
 		"typescript": "^5.6.0",
 		"vite": "^8.0.14",
 		"vitest": "^4.1.7"
+	},
+	"dependencies": {
+		"ajv": "^8.20.0"
 	}
 }

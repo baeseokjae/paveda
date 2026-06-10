@@ -17,7 +17,7 @@ describe("runtime smoke", () => {
 	it("records a synthetic hook session and verifies EventStore replay", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "paveda-runtime-smoke-"));
 		tempDirs.push(cwd);
-		const dbPath = join(cwd, ".harness", "store.db");
+		const dbPath = join(cwd, ".paveda", "ledger", "paveda.db");
 
 		const result = runRuntimeSmoke({
 			cwd,
@@ -68,7 +68,7 @@ describe("runtime smoke", () => {
 
 		const result = runRuntimeSmoke({
 			cwd,
-			dbPath: join(cwd, ".harness", "store.db"),
+			dbPath: join(cwd, ".paveda", "ledger", "paveda.db"),
 			sessionId: "runtime-smoke-no-project-hooks",
 			env: { PAVEDA_PROJECT_HOOKS: "on" },
 		});
@@ -97,14 +97,14 @@ describe("runtime smoke", () => {
 			sessionId: "runtime-smoke-env-store",
 		});
 		expect(existsSync(dbPath)).toBe(true);
-		expect(existsSync(join(cwd, ".harness", "store.db"))).toBe(false);
+		expect(existsSync(join(cwd, ".paveda", "ledger", "paveda.db"))).toBe(false);
 	});
 
 	it("can target the user EventStore scope", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "paveda-runtime-smoke-user-scope-"));
 		const home = mkdtempSync(join(tmpdir(), "paveda-runtime-smoke-home-"));
 		tempDirs.push(cwd, home);
-		const dbPath = join(home, ".harness", "store.db");
+		const dbPath = join(home, ".paveda", "ledger", "paveda.db");
 
 		const result = runRuntimeSmoke({
 			cwd,
@@ -121,7 +121,7 @@ describe("runtime smoke", () => {
 			sessionId: "runtime-smoke-user-scope",
 		});
 		expect(existsSync(dbPath)).toBe(true);
-		expect(existsSync(join(cwd, ".harness", "store.db"))).toBe(false);
+		expect(existsSync(join(cwd, ".paveda", "ledger", "paveda.db"))).toBe(false);
 	});
 
 	it("fails before writing when cwd is missing", () => {
@@ -130,7 +130,7 @@ describe("runtime smoke", () => {
 		expect(() =>
 			runRuntimeSmoke({
 				cwd,
-				dbPath: join(cwd, ".harness", "store.db"),
+				dbPath: join(cwd, ".paveda", "ledger", "paveda.db"),
 				sessionId: "runtime-smoke-missing-cwd",
 				env: {},
 			}),
@@ -141,7 +141,7 @@ describe("runtime smoke", () => {
 	it("fails before writing when hook config env is invalid", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "paveda-runtime-smoke-invalid-env-"));
 		tempDirs.push(cwd);
-		const dbPath = join(cwd, ".harness", "store.db");
+		const dbPath = join(cwd, ".paveda", "ledger", "paveda.db");
 
 		expect(() =>
 			runRuntimeSmoke({

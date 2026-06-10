@@ -539,6 +539,12 @@ describe("Claude Code adapter", () => {
 				hookEventName: "PreToolUse",
 				cwd: "/repo",
 				tool: "Bash",
+				hostLifecycle: expect.objectContaining({
+					host: "claude-code",
+					phaseId: "execute",
+					eventType: "claude.tool.started",
+					normalizedStatus: "active",
+				}),
 			},
 		});
 	});
@@ -557,6 +563,96 @@ describe("Claude Code adapter", () => {
 			matcher: "apply_patch",
 			hookName: "harness.blast.check",
 		});
+	});
+
+	it("normalizes Claude Code run-aware tool hooks into host lifecycle payloads", () => {
+		expect(
+			fromClaudeCodeHookPayload({
+				hook_event_name: "PostToolUse",
+				session_id: "session-run-aware",
+				paveda_run_id: "019a0000-0000-7000-8000-000000000001",
+				tool_use_id: "tool-1",
+				tool_name: "Bash",
+				tool_input: { command: "npm test -- --runInBand" },
+				tool_response: { exit_code: 0 },
+			}),
+		).toMatchObject({
+			payload: {
+				hostLifecycle: {
+					host: "claude-code",
+					runId: "019a0000-0000-7000-8000-000000000001",
+					phaseId: "execute",
+					eventType: "claude.tool.completed",
+					normalizedStatus: "completed",
+					payload: {
+						tool: "Bash",
+						toolUseId: "tool-1",
+						command: "npm test -- --runInBand",
+						exitCode: 0,
+					},
+					evidence: {
+						evidenceId: "claude-bash-tool-1",
+						kind: "command",
+						result: "pass",
+						command: "npm test -- --runInBand",
+						exitCode: 0,
+					},
+				},
+			},
+		});
+	});
+
+	it("captures Claude Code lifecycle hooks into the run ledger when a run id is present", () => {
+		const store = openTempStore();
+		const run = store.createRun({
+			objective: "Capture Claude Code hook lifecycle",
+			profile: "strict",
+			host: "claude-code",
+			context: { taskType: "code" },
+			ts: 100,
+		});
+		const input = fromClaudeCodeHookPayload({
+			hook_event_name: "PostToolUse",
+			session_id: "session-ledger",
+			paveda_run_id: run.runId,
+			tool_use_id: "tool-ledger",
+			tool_name: "Bash",
+			tool_input: { command: "npm test -- --runInBand" },
+			tool_response: { exit_code: 1 },
+		});
+
+		const result = dispatchHookEvent(store, { ...input, ts: 200, config: config() });
+
+		expect(result.hostLifecycle).toMatchObject({
+			status: "recorded",
+			hostEvent: {
+				runId: run.runId,
+				host: "claude-code",
+				eventType: "claude.tool.failed",
+				normalizedStatus: "failed",
+			},
+			phaseEvent: {
+				runId: run.runId,
+				phaseId: "execute",
+				eventType: "claude.tool.failed",
+				status: "failed",
+			},
+			evidence: {
+				runId: run.runId,
+				evidenceId: "claude-bash-tool-ledger",
+				kind: "command",
+				result: "fail",
+				command: "npm test -- --runInBand",
+				exitCode: 1,
+			},
+		});
+		expect(store.listHostEvents(run.runId)).toHaveLength(1);
+		expect(store.listPhaseEvents(run.runId, "execute")).toHaveLength(1);
+		expect(store.listEvidence(run.runId).map((item) => item.evidenceId)).toContain(
+			"claude-bash-tool-ledger",
+		);
+
+		store.close();
 	});
 
 	it("marks Stop payloads as completed sessions", () => {

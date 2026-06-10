@@ -1,0 +1,1733 @@
+{
+  "id": "paveda.universal.v1",
+  "schemaVersion": "1.0.0",
+  "contractVersion": "1.0.0",
+  "minimumPavedaVersion": "0.1.0",
+  "description": "Universal phase, evidence, scoring, capability, projection, override, and learning contract for host-native Paveda runs.",
+  "profiles": [
+    "fast",
+    "standard",
+    "strict",
+    "release"
+  ],
+  "phaseGraph": {
+    "entryPhase": "intake",
+    "terminalPhases": [
+      "handoff",
+      "blocked"
+    ],
+    "happyPath": [
+      "intake",
+      "clarify",
+      "plan",
+      "execute",
+      "score",
+      "unit-test",
+      "e2e-test",
+      "semantic-adversarial-verification",
+      "repair",
+      "handoff"
+    ],
+    "repairEdges": [
+      "semantic-adversarial-verification:repair"
+    ],
+    "nodes": [
+      {
+        "id": "intake",
+        "label": "Intake",
+        "kind": "intake",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "goal.native"
+        ],
+        "inputs": [
+          "user_task"
+        ],
+        "outputs": [
+          "objective",
+          "acceptance_criteria"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "task-intake",
+            "kind": "host_event",
+            "requiredForProfiles": [
+              "standard",
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail"
+              ],
+              "requiresArtifact": false,
+              "requiresCommand": false,
+              "requiresExitCode": false,
+              "requiresRationale": false,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "goal.native",
+            "artifactTypes": [
+              "ledger-summary"
+            ],
+            "scope": "host_lifecycle",
+            "notApplicableAllowed": false,
+            "notApplicableRationaleRequired": false,
+            "redactionRequired": false,
+            "ledgerFields": [
+              "runs.objective",
+              "runs.acceptance_criteria"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "ambiguity_score"
+        ],
+        "failurePolicy": {
+          "onFail": "block",
+          "missingCapability": "block"
+        }
+      },
+      {
+        "id": "clarify",
+        "label": "Clarify",
+        "kind": "clarification",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "workflow.native"
+        ],
+        "inputs": [
+          "objective",
+          "repo_context"
+        ],
+        "outputs": [
+          "clarified_objective",
+          "known_unknowns"
+        ],
+        "requiredEvidence": [],
+        "scoreImpacts": [
+          "ambiguity_score"
+        ],
+        "failurePolicy": {
+          "onFail": "repair",
+          "missingCapability": "block",
+          "maxAttempts": 2
+        }
+      },
+      {
+        "id": "plan",
+        "label": "Plan",
+        "kind": "planning",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "workflow.native"
+        ],
+        "inputs": [
+          "clarified_objective",
+          "repo_context"
+        ],
+        "outputs": [
+          "phase_plan",
+          "verification_plan"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "plan-quality-review",
+            "kind": "semantic_review",
+            "requiredForProfiles": [
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": false,
+              "requiresExitCode": false,
+              "requiresRationale": true,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "semantic.review",
+            "artifactTypes": [
+              "review-summary"
+            ],
+            "scope": "manual_decision",
+            "notApplicableAllowed": false,
+            "notApplicableRationaleRequired": false,
+            "redactionRequired": false,
+            "ledgerFields": [
+              "scores.plan_quality_score",
+              "evidence.result"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "plan_quality_score"
+        ],
+        "failurePolicy": {
+          "onFail": "repair",
+          "missingCapability": "block",
+          "maxAttempts": 2
+        }
+      },
+      {
+        "id": "execute",
+        "label": "Execute",
+        "kind": "execution",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "command.run",
+          "artifact.write",
+          "ledger.write"
+        ],
+        "inputs": [
+          "phase_plan"
+        ],
+        "outputs": [
+          "changes",
+          "command_evidence"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "execution-command",
+            "kind": "command",
+            "requiredForProfiles": [
+              "standard",
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": true,
+              "requiresExitCode": true,
+              "requiresRationale": false,
+              "flakyHandling": "inconclusive",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "command.run",
+            "artifactTypes": [
+              "stdout",
+              "stderr",
+              "exit-code"
+            ],
+            "scope": "changed_files",
+            "notApplicableAllowed": true,
+            "notApplicableRationaleRequired": true,
+            "redactionRequired": true,
+            "ledgerFields": [
+              "evidence.command",
+              "evidence.exit_code",
+              "artifacts.path_hash"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "progress_score",
+          "match_score"
+        ],
+        "failurePolicy": {
+          "onFail": "repair",
+          "missingCapability": "block",
+          "maxAttempts": 3
+        }
+      },
+      {
+        "id": "score",
+        "label": "Score",
+        "kind": "scoring",
+        "required": true,
+        "hostPrimitivePreference": "paveda-wrapper",
+        "requiredCapabilities": [
+          "ledger.write",
+          "semantic.review",
+          "risk.review"
+        ],
+        "inputs": [
+          "changes",
+          "evidence"
+        ],
+        "outputs": [
+          "scores",
+          "score_decisions"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "score-audit",
+            "kind": "semantic_review",
+            "requiredForProfiles": [
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": false,
+              "requiresExitCode": false,
+              "requiresRationale": true,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "semantic.review",
+            "artifactTypes": [
+              "score-summary"
+            ],
+            "scope": "manual_decision",
+            "notApplicableAllowed": false,
+            "notApplicableRationaleRequired": false,
+            "redactionRequired": false,
+            "ledgerFields": [
+              "scores.metric",
+              "scores.value",
+              "scores.decision"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "ambiguity_score",
+          "plan_quality_score",
+          "progress_score",
+          "match_score",
+          "verification_score",
+          "risk_score"
+        ],
+        "failurePolicy": {
+          "onFail": "repair",
+          "missingCapability": "block",
+          "maxAttempts": 2
+        }
+      },
+      {
+        "id": "unit-test",
+        "label": "Unit Test",
+        "kind": "verification",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "test.unit",
+          "command.run",
+          "artifact.write"
+        ],
+        "inputs": [
+          "changes",
+          "test_policy"
+        ],
+        "outputs": [
+          "unit_test_evidence"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "unit-test-result",
+            "kind": "unit_test",
+            "requiredForProfiles": [
+              "standard",
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": true,
+              "requiresExitCode": true,
+              "requiresRationale": false,
+              "flakyHandling": "inconclusive",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "test.unit",
+            "artifactTypes": [
+              "test-report",
+              "stdout",
+              "stderr"
+            ],
+            "scope": "changed_behavior",
+            "notApplicableAllowed": true,
+            "notApplicableRationaleRequired": true,
+            "redactionRequired": true,
+            "ledgerFields": [
+              "evidence.command",
+              "evidence.exit_code",
+              "evidence.changed_behavior_mapping"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "verification_score"
+        ],
+        "failurePolicy": {
+          "onFail": "repair",
+          "missingCapability": "ask_setup_sprint",
+          "maxAttempts": 2
+        }
+      },
+      {
+        "id": "e2e-test",
+        "label": "E2E Test",
+        "kind": "verification",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "test.e2e",
+          "browser.run",
+          "command.run",
+          "artifact.write"
+        ],
+        "inputs": [
+          "changes",
+          "test_policy"
+        ],
+        "outputs": [
+          "e2e_test_evidence"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "e2e-test-result",
+            "kind": "e2e_test",
+            "requiredForProfiles": [
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": true,
+              "requiresExitCode": true,
+              "requiresRationale": false,
+              "flakyHandling": "inconclusive",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "test.e2e",
+            "artifactTypes": [
+              "test-report",
+              "trace",
+              "screenshot"
+            ],
+            "scope": "user_visible",
+            "notApplicableAllowed": true,
+            "notApplicableRationaleRequired": true,
+            "redactionRequired": true,
+            "ledgerFields": [
+              "evidence.command",
+              "evidence.exit_code",
+              "evidence.changed_behavior_mapping"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "verification_score"
+        ],
+        "failurePolicy": {
+          "onFail": "repair",
+          "missingCapability": "ask_setup_sprint",
+          "maxAttempts": 2
+        }
+      },
+      {
+        "id": "semantic-adversarial-verification",
+        "label": "Semantic And Adversarial Verification",
+        "kind": "verification",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "semantic.review",
+          "risk.review",
+          "security.scan"
+        ],
+        "inputs": [
+          "changes",
+          "test_evidence",
+          "scores"
+        ],
+        "outputs": [
+          "semantic_review",
+          "adversarial_review",
+          "risk_review"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "semantic-review",
+            "kind": "semantic_review",
+            "requiredForProfiles": [
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": false,
+              "requiresExitCode": false,
+              "requiresRationale": true,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "semantic.review",
+            "artifactTypes": [
+              "review-summary"
+            ],
+            "scope": "manual_decision",
+            "notApplicableAllowed": false,
+            "notApplicableRationaleRequired": false,
+            "redactionRequired": false,
+            "ledgerFields": [
+              "evidence.result",
+              "evidence.rationale"
+            ]
+          },
+          {
+            "id": "adversarial-review",
+            "kind": "adversarial_review",
+            "requiredForProfiles": [
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": false,
+              "requiresExitCode": false,
+              "requiresRationale": true,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "risk.review",
+            "artifactTypes": [
+              "review-summary"
+            ],
+            "scope": "manual_decision",
+            "notApplicableAllowed": false,
+            "notApplicableRationaleRequired": false,
+            "redactionRequired": false,
+            "ledgerFields": [
+              "evidence.result",
+              "evidence.rationale"
+            ]
+          },
+          {
+            "id": "security-review",
+            "kind": "security_scan",
+            "requiredForProfiles": [
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": true,
+              "requiresExitCode": true,
+              "requiresRationale": true,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "security.scan",
+            "artifactTypes": [
+              "scan-report"
+            ],
+            "scope": "whole_project",
+            "notApplicableAllowed": true,
+            "notApplicableRationaleRequired": true,
+            "redactionRequired": true,
+            "ledgerFields": [
+              "evidence.command",
+              "evidence.exit_code",
+              "evidence.rationale"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "match_score",
+          "risk_score",
+          "verification_score"
+        ],
+        "failurePolicy": {
+          "onFail": "repair",
+          "missingCapability": "block",
+          "maxAttempts": 2
+        }
+      },
+      {
+        "id": "repair",
+        "label": "Repair",
+        "kind": "repair",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "workflow.native",
+          "loop.native"
+        ],
+        "inputs": [
+          "failed_evidence",
+          "score_decisions"
+        ],
+        "outputs": [
+          "repair_decision",
+          "repair_changes"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "repair-decision",
+            "kind": "manual_decision",
+            "requiredForProfiles": [
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": false,
+              "requiresExitCode": false,
+              "requiresRationale": true,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "loop.native",
+            "artifactTypes": [
+              "decision-record"
+            ],
+            "scope": "manual_decision",
+            "notApplicableAllowed": true,
+            "notApplicableRationaleRequired": true,
+            "redactionRequired": false,
+            "ledgerFields": [
+              "decisions.reason",
+              "phase_events.status"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "progress_score"
+        ],
+        "failurePolicy": {
+          "onFail": "block",
+          "missingCapability": "block"
+        }
+      },
+      {
+        "id": "handoff",
+        "label": "Handoff",
+        "kind": "handoff",
+        "required": true,
+        "hostPrimitivePreference": "host-native",
+        "requiredCapabilities": [
+          "ledger.write",
+          "artifact.write"
+        ],
+        "inputs": [
+          "final_evidence",
+          "scores"
+        ],
+        "outputs": [
+          "run_summary",
+          "user_handoff"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "evidence-audit",
+            "kind": "semantic_review",
+            "requiredForProfiles": [
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "pass"
+              ],
+              "blockingResults": [
+                "block",
+                "fail",
+                "inconclusive"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": false,
+              "requiresExitCode": false,
+              "requiresRationale": true,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "semantic.review",
+            "artifactTypes": [
+              "run-summary"
+            ],
+            "scope": "manual_decision",
+            "notApplicableAllowed": false,
+            "notApplicableRationaleRequired": false,
+            "redactionRequired": false,
+            "ledgerFields": [
+              "runs.status",
+              "evidence.result",
+              "scores.decision"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "verification_score"
+        ],
+        "failurePolicy": {
+          "onFail": "block",
+          "missingCapability": "block"
+        }
+      },
+      {
+        "id": "blocked",
+        "label": "Blocked",
+        "kind": "block",
+        "required": true,
+        "hostPrimitivePreference": "paveda-wrapper",
+        "requiredCapabilities": [
+          "ledger.write"
+        ],
+        "inputs": [
+          "blocking_reason"
+        ],
+        "outputs": [
+          "blocked_summary"
+        ],
+        "requiredEvidence": [
+          {
+            "id": "block-record",
+            "kind": "manual_decision",
+            "requiredForProfiles": [
+              "fast",
+              "standard",
+              "strict",
+              "release"
+            ],
+            "resultPolicy": {
+              "acceptedResults": [
+                "block"
+              ],
+              "blockingResults": [
+                "block"
+              ],
+              "requiresArtifact": true,
+              "requiresCommand": false,
+              "requiresExitCode": false,
+              "requiresRationale": true,
+              "flakyHandling": "block",
+              "passRequiresDirectEvidence": true
+            },
+            "providerCapability": "ledger.write",
+            "artifactTypes": [
+              "decision-record"
+            ],
+            "scope": "manual_decision",
+            "notApplicableAllowed": false,
+            "notApplicableRationaleRequired": false,
+            "redactionRequired": false,
+            "ledgerFields": [
+              "runs.status",
+              "decisions.reason"
+            ]
+          }
+        ],
+        "scoreImpacts": [
+          "risk_score"
+        ],
+        "failurePolicy": {
+          "onFail": "block",
+          "missingCapability": "block"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "from": "intake",
+        "to": "clarify",
+        "condition": "objective recorded",
+        "type": "normal",
+        "allowedProfiles": [
+          "fast",
+          "standard",
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "task-intake"
+        ],
+        "recordsDecision": false
+      },
+      {
+        "from": "clarify",
+        "to": "plan",
+        "condition": "ambiguity is below profile threshold",
+        "type": "normal",
+        "allowedProfiles": [
+          "fast",
+          "standard",
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [],
+        "recordsDecision": false
+      },
+      {
+        "from": "plan",
+        "to": "execute",
+        "condition": "plan quality gate passes",
+        "type": "normal",
+        "allowedProfiles": [
+          "fast",
+          "standard",
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "plan-quality-review"
+        ],
+        "recordsDecision": false
+      },
+      {
+        "from": "execute",
+        "to": "score",
+        "condition": "execution evidence recorded",
+        "type": "normal",
+        "allowedProfiles": [
+          "fast",
+          "standard",
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "execution-command"
+        ],
+        "recordsDecision": false
+      },
+      {
+        "from": "score",
+        "to": "unit-test",
+        "condition": "score audit does not block",
+        "type": "normal",
+        "allowedProfiles": [
+          "standard",
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "score-audit"
+        ],
+        "recordsDecision": true
+      },
+      {
+        "from": "unit-test",
+        "to": "e2e-test",
+        "condition": "unit evidence passes or is justified as not applicable",
+        "type": "normal",
+        "allowedProfiles": [
+          "standard",
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "unit-test-result"
+        ],
+        "recordsDecision": true
+      },
+      {
+        "from": "e2e-test",
+        "to": "semantic-adversarial-verification",
+        "condition": "e2e evidence passes or is justified as not applicable",
+        "type": "normal",
+        "allowedProfiles": [
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "e2e-test-result"
+        ],
+        "recordsDecision": true
+      },
+      {
+        "from": "semantic-adversarial-verification",
+        "to": "repair",
+        "condition": "repair checkpoint reached",
+        "type": "repair",
+        "allowedProfiles": [
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "semantic-review",
+          "adversarial-review"
+        ],
+        "recordsDecision": true,
+        "maxAttempts": 2
+      },
+      {
+        "from": "repair",
+        "to": "handoff",
+        "condition": "no blocking repair remains",
+        "type": "normal",
+        "allowedProfiles": [
+          "fast",
+          "standard",
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "repair-decision"
+        ],
+        "recordsDecision": true
+      },
+      {
+        "from": "handoff",
+        "to": "blocked",
+        "condition": "evidence audit blocks completion",
+        "type": "block",
+        "allowedProfiles": [
+          "fast",
+          "standard",
+          "strict",
+          "release"
+        ],
+        "requiresEvidence": [
+          "evidence-audit"
+        ],
+        "recordsDecision": true
+      }
+    ]
+  },
+  "taskTypes": [
+    "code",
+    "ui",
+    "api",
+    "data",
+    "infra",
+    "test",
+    "docs",
+    "metadata",
+    "mixed"
+  ],
+  "scoreMetrics": [
+    {
+      "id": "ambiguity_score",
+      "direction": "lower_is_better",
+      "range": {
+        "min": 0,
+        "max": 1
+      },
+      "description": "Unresolved task and acceptance uncertainty.",
+      "inputs": [
+        "runs.objective",
+        "runs.acceptance_criteria",
+        "phase_events.clarification"
+      ],
+      "calculation": {
+        "kind": "manual_review"
+      },
+      "requiredEvidence": [
+        "task-intake"
+      ],
+      "ledgerField": "scores.ambiguity_score"
+    },
+    {
+      "id": "plan_quality_score",
+      "direction": "higher_is_better",
+      "range": {
+        "min": 0,
+        "max": 1
+      },
+      "description": "Plan completeness, sequencing, and verification fit.",
+      "inputs": [
+        "phase_plan",
+        "verification_plan"
+      ],
+      "calculation": {
+        "kind": "manual_review"
+      },
+      "requiredEvidence": [
+        "plan-quality-review"
+      ],
+      "ledgerField": "scores.plan_quality_score"
+    },
+    {
+      "id": "progress_score",
+      "direction": "higher_is_better",
+      "range": {
+        "min": 0,
+        "max": 1
+      },
+      "description": "Forward movement against the accepted objective.",
+      "inputs": [
+        "phase_events",
+        "changes"
+      ],
+      "calculation": {
+        "kind": "weighted_inputs",
+        "weights": {
+          "phase_events": 0.4,
+          "changes": 0.6
+        }
+      },
+      "requiredEvidence": [
+        "execution-command"
+      ],
+      "ledgerField": "scores.progress_score"
+    },
+    {
+      "id": "match_score",
+      "direction": "higher_is_better",
+      "range": {
+        "min": 0,
+        "max": 1
+      },
+      "description": "Fit between implementation, contract, and acceptance criteria.",
+      "inputs": [
+        "runs.acceptance_criteria",
+        "changes",
+        "semantic-review"
+      ],
+      "calculation": {
+        "kind": "manual_review"
+      },
+      "requiredEvidence": [
+        "semantic-review"
+      ],
+      "ledgerField": "scores.match_score"
+    },
+    {
+      "id": "verification_score",
+      "direction": "higher_is_better",
+      "range": {
+        "min": 0,
+        "max": 1
+      },
+      "description": "Coverage and directness of required verification evidence.",
+      "inputs": [
+        "unit-test-result",
+        "e2e-test-result",
+        "evidence-audit"
+      ],
+      "calculation": {
+        "kind": "evidence_ratio"
+      },
+      "requiredEvidence": [
+        "unit-test-result",
+        "e2e-test-result",
+        "evidence-audit"
+      ],
+      "ledgerField": "scores.verification_score"
+    },
+    {
+      "id": "risk_score",
+      "direction": "lower_is_better",
+      "range": {
+        "min": 0,
+        "max": 1
+      },
+      "description": "Residual regression, safety, security, and policy risk.",
+      "inputs": [
+        "adversarial-review",
+        "security-review",
+        "policy_violations"
+      ],
+      "calculation": {
+        "kind": "risk_rule"
+      },
+      "requiredEvidence": [
+        "adversarial-review",
+        "security-review"
+      ],
+      "ledgerField": "scores.risk_score"
+    }
+  ],
+  "evidenceResults": [
+    "pass",
+    "fail",
+    "block",
+    "not_applicable",
+    "inconclusive"
+  ],
+  "gates": [
+    {
+      "id": "unit-gate",
+      "phase": "unit-test",
+      "evidenceKind": "unit_test",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "task changes executable behavior",
+      "capability": "test.unit",
+      "missingCapabilityBehavior": "ask_setup_sprint",
+      "notApplicablePolicy": {
+        "allowed": true,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "e2e-gate",
+      "phase": "e2e-test",
+      "evidenceKind": "e2e_test",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "task changes user-visible behavior or system boundary behavior",
+      "capability": "test.e2e",
+      "missingCapabilityBehavior": "ask_setup_sprint",
+      "notApplicablePolicy": {
+        "allowed": true,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "coverage-gate",
+      "phase": "unit-test",
+      "evidenceKind": "coverage",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "mixed"
+      ],
+      "conditionalWhen": "project policy declares coverage threshold",
+      "capability": "test.coverage",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": true,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "block",
+      "repairAllowed": false,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "typecheck-gate",
+      "phase": "unit-test",
+      "evidenceKind": "typecheck",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "mixed"
+      ],
+      "conditionalWhen": "project has a typecheck command",
+      "capability": "command.run",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "lint-gate",
+      "phase": "unit-test",
+      "evidenceKind": "lint",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "mixed"
+      ],
+      "conditionalWhen": "project has a lint command",
+      "capability": "command.run",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "build-gate",
+      "phase": "unit-test",
+      "evidenceKind": "build",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "mixed"
+      ],
+      "conditionalWhen": "project has a build command",
+      "capability": "command.run",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "semantic-gate",
+      "phase": "semantic-adversarial-verification",
+      "evidenceKind": "semantic_review",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "strict or release profile is active",
+      "capability": "semantic.review",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    },
+    {
+      "id": "risk-gate",
+      "phase": "semantic-adversarial-verification",
+      "evidenceKind": "risk_review",
+      "requiredForTaskTypes": [
+        "code",
+        "ui",
+        "api",
+        "data",
+        "infra",
+        "test",
+        "docs",
+        "metadata",
+        "mixed"
+      ],
+      "conditionalWhen": "strict or release profile is active",
+      "capability": "risk.review",
+      "missingCapabilityBehavior": "block",
+      "notApplicablePolicy": {
+        "allowed": false,
+        "requiresRationale": true,
+        "requiresClassifierReason": true,
+        "requiresUserApproval": true
+      },
+      "failureBehavior": "repair_then_block",
+      "repairAllowed": true,
+      "releaseOverrideAllowed": false
+    }
+  ],
+  "capabilityRequirements": [
+    {
+      "id": "goal.native",
+      "category": "host",
+      "description": "Host can represent an objective and completion status through its own planning primitive.",
+      "requiredBy": [
+        "intake"
+      ],
+      "evidenceKinds": [
+        "host_event"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "workflow.native",
+      "category": "host",
+      "description": "Host can run structured phase or workflow steps without Paveda replacing the host planner.",
+      "requiredBy": [
+        "clarify",
+        "plan",
+        "repair"
+      ],
+      "evidenceKinds": [
+        "host_event",
+        "manual_decision"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "loop.native",
+      "category": "host",
+      "description": "Host can expose iteration or retry behavior as lifecycle evidence.",
+      "requiredBy": [
+        "repair"
+      ],
+      "evidenceKinds": [
+        "host_event",
+        "manual_decision"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "hook.lifecycle",
+      "category": "lifecycle",
+      "description": "Host supports lifecycle hooks that Paveda can capture into the ledger.",
+      "requiredBy": [
+        "host-adapter"
+      ],
+      "evidenceKinds": [
+        "host_event"
+      ],
+      "missingBehavior": "ask_setup_sprint",
+      "fallbackPolicy": {
+        "allowed": true,
+        "mode": "paveda_wrapper",
+        "requiresUserApproval": true
+      }
+    },
+    {
+      "id": "wrapper.lifecycle",
+      "category": "lifecycle",
+      "description": "Paveda can wrap a native command to record lifecycle state when hooks are unavailable.",
+      "requiredBy": [
+        "paveda run"
+      ],
+      "evidenceKinds": [
+        "host_event",
+        "command"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "ledger.write",
+      "category": "storage",
+      "description": "Paveda can write run, phase, score, evidence, and decision summaries.",
+      "requiredBy": [
+        "score",
+        "handoff",
+        "blocked"
+      ],
+      "evidenceKinds": [
+        "host_event",
+        "manual_decision"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "artifact.write",
+      "category": "storage",
+      "description": "Paveda can store raw evidence artifacts after redaction.",
+      "requiredBy": [
+        "execute",
+        "unit-test",
+        "e2e-test",
+        "handoff"
+      ],
+      "evidenceKinds": [
+        "command",
+        "unit_test",
+        "e2e_test",
+        "trace",
+        "screenshot"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "command.run",
+      "category": "command",
+      "description": "Host or wrapper can run project commands and capture exit status.",
+      "requiredBy": [
+        "execute",
+        "unit-test",
+        "e2e-test",
+        "lint-gate",
+        "typecheck-gate",
+        "build-gate"
+      ],
+      "evidenceKinds": [
+        "command",
+        "unit_test",
+        "e2e_test",
+        "lint",
+        "typecheck",
+        "build"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "test.unit",
+      "category": "test",
+      "description": "Project can run focused unit tests mapped to changed behavior.",
+      "requiredBy": [
+        "unit-test",
+        "unit-gate"
+      ],
+      "evidenceKinds": [
+        "unit_test"
+      ],
+      "missingBehavior": "ask_setup_sprint",
+      "fallbackPolicy": {
+        "allowed": true,
+        "mode": "setup_sprint",
+        "requiresUserApproval": true
+      }
+    },
+    {
+      "id": "test.e2e",
+      "category": "test",
+      "description": "Project can run end-to-end tests for user-visible or boundary behavior.",
+      "requiredBy": [
+        "e2e-test",
+        "e2e-gate"
+      ],
+      "evidenceKinds": [
+        "e2e_test",
+        "trace",
+        "screenshot"
+      ],
+      "missingBehavior": "ask_setup_sprint",
+      "fallbackPolicy": {
+        "allowed": true,
+        "mode": "setup_sprint",
+        "requiresUserApproval": true
+      }
+    },
+    {
+      "id": "test.coverage",
+      "category": "test",
+      "description": "Project can report coverage for changed behavior or declared thresholds.",
+      "requiredBy": [
+        "coverage-gate"
+      ],
+      "evidenceKinds": [
+        "coverage"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": true,
+        "mode": "setup_sprint",
+        "requiresUserApproval": true
+      }
+    },
+    {
+      "id": "browser.run",
+      "category": "test",
+      "description": "Project can run browser-based verification when e2e evidence needs it.",
+      "requiredBy": [
+        "e2e-test"
+      ],
+      "evidenceKinds": [
+        "e2e_test",
+        "screenshot",
+        "trace"
+      ],
+      "missingBehavior": "ask_setup_sprint",
+      "fallbackPolicy": {
+        "allowed": true,
+        "mode": "setup_sprint",
+        "requiresUserApproval": true
+      }
+    },
+    {
+      "id": "semantic.review",
+      "category": "review",
+      "description": "Host can produce an evidence-backed review of fit against acceptance criteria.",
+      "requiredBy": [
+        "plan",
+        "score",
+        "semantic-gate",
+        "handoff"
+      ],
+      "evidenceKinds": [
+        "semantic_review"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "risk.review",
+      "category": "review",
+      "description": "Host can produce adversarial and residual risk review evidence.",
+      "requiredBy": [
+        "score",
+        "risk-gate"
+      ],
+      "evidenceKinds": [
+        "adversarial_review",
+        "risk_review"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "security.scan",
+      "category": "review",
+      "description": "Project can run or record security-oriented verification for relevant changes.",
+      "requiredBy": [
+        "semantic-adversarial-verification"
+      ],
+      "evidenceKinds": [
+        "security_scan"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": true,
+        "mode": "setup_sprint",
+        "requiresUserApproval": true
+      }
+    },
+    {
+      "id": "projection.write",
+      "category": "projection",
+      "description": "Paveda can generate host-native files from canonical assets.",
+      "requiredBy": [
+        "projection"
+      ],
+      "evidenceKinds": [
+        "command"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "projection.drift",
+      "category": "projection",
+      "description": "Paveda can detect projection drift and require explicit resolution.",
+      "requiredBy": [
+        "projection"
+      ],
+      "evidenceKinds": [
+        "command",
+        "manual_decision"
+      ],
+      "missingBehavior": "block",
+      "fallbackPolicy": {
+        "allowed": false,
+        "mode": "none",
+        "requiresUserApproval": false
+      }
+    },
+    {
+      "id": "learning.propose",
+      "category": "learning",
+      "description": "Paveda can propose learned patterns without auto-relaxing gates or thresholds.",
+      "requiredBy": [
+        "learning"
+      ],
+      "evidenceKinds": [
+        "manual_decision",
+        "semantic_review"
+      ],
+      "missingBehavior": "not_applicable_allowed",
+      "fallbackPolicy": {
+        "allowed": true,
+        "mode": "host_native",
+        "requiresUserApproval": true
+      }
+    }
+  ],
+  "projectionRules": {
+    "sourceRoots": [
+      ".paveda/"
+    ],
+    "packageAssetRoots": [
+      "assets/harness/contracts/",
+      "assets/harness/hosts/"
+    ],
+    "generatedProjectionTargets": [
+      ".claude/",
+      ".codex/",
+      ".pi/",
+      ".hermes/",
+      "AGENTS.md",
+      "CLAUDE.md"
+    ],
+    "driftPolicy": "block",
+    "allowedDriftResolutions": [
+      "import",
+      "regenerate",
+      "approve-override"
+    ]
+  },
+  "overridePolicy": {
+    "allowedModes": [
+      "approve-override",
+      "import",
+      "regenerate"
+    ],
+    "auditRequired": true,
+    "releaseForbidden": [
+      "unit-gate",
+      "e2e-gate",
+      "coverage-gate",
+      "semantic-gate",
+      "risk-gate"
+    ],
+    "expiryRequired": true
+  },
+  "learningPolicy": {
+    "states": [
+      "observed",
+      "candidate",
+      "validated",
+      "promoted",
+      "retired"
+    ],
+    "promotion": {
+      "minimumSuccessfulRuns": 3,
+      "minimumConfidence": 0.9,
+      "requiresUserApproval": true,
+      "requiresEvidenceAudit": true
+    },
+    "restrictions": {
+      "cannotRelaxGates": true,
+      "cannotRelaxThresholds": true,
+      "cannotBypassReleaseRestrictions": true
+    }
+  }
+}

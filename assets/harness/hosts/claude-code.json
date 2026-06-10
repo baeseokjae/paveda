@@ -1,0 +1,274 @@
+{
+  "host": "claude-code",
+  "schemaVersion": "1.0.0",
+  "declarationVersion": "1.0.0",
+  "minimumPavedaVersion": "0.1.0",
+  "displayName": "Claude Code",
+  "supportLevel": "deep",
+  "versionConstraints": {
+    "detectedVersionRange": null,
+    "minimumHostVersion": null
+  },
+  "capabilities": [
+    {
+      "id": "goal.native",
+      "support": "native",
+      "confidence": 0.9,
+      "source": "manifest",
+      "nativePrimitive": "session objective",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "workflow.native",
+      "support": "native",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "workflow",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "loop.native",
+      "support": "native",
+      "confidence": 0.9,
+      "source": "manifest",
+      "nativePrimitive": "loop",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "hook.lifecycle",
+      "support": "native",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "hooks",
+      "limitations": [],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
+    {
+      "id": "wrapper.lifecycle",
+      "support": "wrapped",
+      "confidence": 0.9,
+      "source": "manifest",
+      "nativePrimitive": "paveda run",
+      "limitations": [
+        "wraps command execution only"
+      ],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "ledger.write",
+      "support": "wrapped",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "paveda ledger writer",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "artifact.write",
+      "support": "wrapped",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "paveda artifact writer",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "command.run",
+      "support": "native",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "tool call",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "test.unit",
+      "support": "wrapped",
+      "confidence": 0.8,
+      "source": "manifest",
+      "nativePrimitive": "project test command",
+      "limitations": [
+        "requires project manifest or auto-detection"
+      ],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
+    {
+      "id": "test.e2e",
+      "support": "wrapped",
+      "confidence": 0.75,
+      "source": "manifest",
+      "nativePrimitive": "project e2e command",
+      "limitations": [
+        "requires project manifest or auto-detection"
+      ],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
+    {
+      "id": "test.coverage",
+      "support": "wrapped",
+      "confidence": 0.7,
+      "source": "manifest",
+      "nativePrimitive": "project coverage command",
+      "limitations": [
+        "requires declared coverage command"
+      ],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
+    {
+      "id": "browser.run",
+      "support": "wrapped",
+      "confidence": 0.75,
+      "source": "manifest",
+      "nativePrimitive": "project browser test command",
+      "limitations": [
+        "requires browser test infrastructure"
+      ],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
+    {
+      "id": "semantic.review",
+      "support": "native",
+      "confidence": 0.9,
+      "source": "manifest",
+      "nativePrimitive": "review phase",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "risk.review",
+      "support": "native",
+      "confidence": 0.9,
+      "source": "manifest",
+      "nativePrimitive": "adversarial review phase",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "security.scan",
+      "support": "wrapped",
+      "confidence": 0.65,
+      "source": "manifest",
+      "nativePrimitive": "project security command",
+      "limitations": [
+        "requires declared security command"
+      ],
+      "requiresSetup": true,
+      "setupSprintAllowed": true
+    },
+    {
+      "id": "projection.write",
+      "support": "wrapped",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "paveda projection regenerate",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "projection.drift",
+      "support": "wrapped",
+      "confidence": 0.95,
+      "source": "manifest",
+      "nativePrimitive": "paveda projection diff",
+      "limitations": [],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    },
+    {
+      "id": "learning.propose",
+      "support": "wrapped",
+      "confidence": 0.8,
+      "source": "manifest",
+      "nativePrimitive": "paveda learning propose",
+      "limitations": [
+        "promotion requires explicit user approval"
+      ],
+      "requiresSetup": false,
+      "setupSprintAllowed": false
+    }
+  ],
+  "unsupportedCapabilities": [],
+  "lifecycleCapture": {
+    "strategy": "hooks",
+    "recordsHostEvents": true,
+    "recordsPhaseEvents": true
+  },
+  "projectionTargets": [
+    {
+      "path": ".claude/CLAUDE.md",
+      "kind": "instruction",
+      "driftPolicy": "block"
+    },
+    {
+      "path": ".claude/skills",
+      "kind": "skill",
+      "driftPolicy": "block"
+    },
+    {
+      "path": ".claude/paveda-projections.json",
+      "kind": "sidecar",
+      "driftPolicy": "block"
+    }
+  ],
+  "eventMappings": [
+    {
+      "hostEvent": "workflow.start",
+      "pavedaEvent": "phase.started"
+    },
+    {
+      "hostEvent": "loop.iteration",
+      "pavedaEvent": "phase.attempt"
+    },
+    {
+      "hostEvent": "tool.call",
+      "pavedaEvent": "host_event.recorded"
+    },
+    {
+      "hostEvent": "workflow.complete",
+      "pavedaEvent": "phase.completed"
+    }
+  ],
+  "commandMappings": [
+    {
+      "pavedaCommand": "paveda do",
+      "hostPrimitive": "workflow"
+    },
+    {
+      "pavedaCommand": "paveda run",
+      "hostPrimitive": "wrapper"
+    }
+  ],
+  "policyConstraints": [
+    "Do not replace host workflow or loop execution.",
+    "Capture evidence through hooks or generated obligations."
+  ],
+  "knownQuirks": [
+    "Lifecycle detail depends on installed hook configuration."
+  ],
+  "conformanceFixtures": [
+    "claude-hook-lifecycle-capture",
+    "claude-bash-command-evidence",
+    "code-change-without-tests-blocks",
+    "docs-only-not-applicable",
+    "projection-drift-blocks",
+    "release-not-supported"
+  ]
+}

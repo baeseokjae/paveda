@@ -86,3 +86,13 @@ Happy path만으로는 부족하다. 최소한 아래 케이스를 포함:
 ## 8. Refactor는 GREEN 이후
 
 테스트가 RED인 동안 구조 개선을 섞지 않는다. 모든 behavior check가 GREEN인 뒤에만 중복 제거, 모듈 심화, 이름 정리를 검토한다.
+
+## 9. Paveda Gate Evidence
+
+Paveda에서는 테스트 실행 결과를 ledger evidence로 남겨야 한다.
+
+- 코드 변경(`code`, `ui`, `api`, `data`, `infra`, `test`, `mixed`)은 unit gate와 e2e/package-level gate를 통과해야 한다.
+- 테스트 인프라가 없으면 구현을 계속하지 말고 최소 테스트 인프라를 추가하는 setup sprint 여부를 사용자에게 확인한다.
+- 문서 또는 metadata/config 변경은 테스트 비대상 근거를 `not_applicable` evidence로 기록한다.
+- `not_applicable` evidence에는 rationale, `metadata.classifierReason`, `metadata.userApproval` 또는 `metadata.approvedBy`가 필요하다.
+- `skip`은 evidence result가 아니다.

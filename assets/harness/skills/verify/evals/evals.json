@@ -1,50 +1,62 @@
 [
 	{
 		"eval_id": 1,
-		"eval_name": "verify-full",
-		"prompt": "",
+		"eval_name": "verify-profile-ladder",
+		"prompt": "--run 018f9f8c-0000-7000-8000-000000000001 --profile strict",
 		"assertions": [
 			{
-				"text": "Lint 결과가 포함되어야 함",
+				"text": "Required gates must be evaluated",
 				"type": "contains_section",
-				"pattern": "Lint"
+				"pattern": "requiredGates"
 			},
 			{
-				"text": "Test 결과가 포함되어야 함",
+				"text": "Verification ladder must be reported",
 				"type": "contains_section",
-				"pattern": "Test"
+				"pattern": "ladder"
 			},
 			{
-				"text": "Build 결과가 포함되어야 함",
+				"text": "Score summary must be reported",
 				"type": "contains_section",
-				"pattern": "Build"
-			},
-			{
-				"text": "최종 PASS/FAIL 판정이 있어야 함",
-				"type": "match_format",
-				"pattern": "(PASS|FAIL)"
+				"pattern": "scoreSummary"
 			}
 		]
 	},
 	{
 		"eval_id": 2,
-		"eval_name": "verify-quick",
-		"prompt": "--quick",
+		"eval_name": "verify-code-unit-e2e-block",
+		"prompt": "--run 018f9f8c-0000-7000-8000-000000000002 --profile strict",
 		"assertions": [
 			{
-				"text": "Lint 결과가 포함되어야 함",
+				"text": "Missing unit evidence blocks code-changing work",
 				"type": "contains_section",
-				"pattern": "Lint"
+				"pattern": "unit-gate"
 			},
 			{
-				"text": "Test 결과가 포함되어야 함",
+				"text": "Missing e2e evidence blocks code-changing work",
 				"type": "contains_section",
-				"pattern": "Test"
+				"pattern": "e2e-gate"
 			},
 			{
-				"text": "최종 PASS/FAIL 판정이 있어야 함",
+				"text": "Overall decision must be block",
 				"type": "match_format",
-				"pattern": "(PASS|FAIL)"
+				"pattern": "\"decision\"\\s*:\\s*\"block\""
+			}
+		]
+	},
+	{
+		"eval_id": 3,
+		"eval_name": "verify-docs-not-applicable",
+		"prompt": "--run 018f9f8c-0000-7000-8000-000000000003 --profile strict",
+		"assertions": [
+			{
+				"text": "Audited not_applicable evidence can satisfy docs test gates",
+				"type": "contains_section",
+				"pattern": "not_applicable"
+			},
+			{
+				"text": "Verification score must still meet threshold",
+				"type": "contains_section",
+				"pattern": "verification_score"
 			}
 		]
 	}

@@ -1,140 +1,79 @@
 [
 	{
 		"eval_id": 1,
-		"eval_name": "do-full-pipeline",
+		"eval_name": "do-contract-shell-start",
 		"prompt": "add health check endpoint to /api/health",
 		"assertions": [
 			{
-				"text": "Product Spec 마크다운이 생성되어야 함",
+				"text": "Paveda run creation command is required",
 				"type": "contains_section",
-				"pattern": "## Product Spec:"
+				"pattern": "paveda do --host"
 			},
 			{
-				"text": "Sprint 분할 섹션이 포함되어야 함",
+				"text": "Host-native execution must be preserved",
 				"type": "contains_section",
-				"pattern": "### Sprint 분할"
+				"pattern": "Host-Native Execution"
 			},
 			{
-				"text": "Generator 에이전트가 호출되어야 함",
+				"text": "Projection drift must block before edits",
 				"type": "contains_section",
-				"pattern": "Generator 결과"
+				"pattern": "projection status"
 			}
 		]
 	},
 	{
 		"eval_id": 2,
-		"eval_name": "do-plan-only",
-		"prompt": "--plan-only 인증 미들웨어 리팩토링",
+		"eval_name": "do-code-test-gates",
+		"prompt": "--task-type code refactor authentication middleware",
 		"assertions": [
 			{
-				"text": "Product Spec 마크다운이 생성되어야 함",
+				"text": "Unit gate is mandatory for code-changing tasks",
 				"type": "contains_section",
-				"pattern": "## Product Spec:"
+				"pattern": "Unit evidence is mandatory"
 			},
 			{
-				"text": "Sprint 분할 섹션이 포함되어야 함",
+				"text": "E2E or package-level gate is mandatory for strict code changes",
 				"type": "contains_section",
-				"pattern": "### Sprint 분할"
+				"pattern": "E2E or package-level E2E evidence is mandatory"
 			},
 			{
-				"text": "코드 파일이 생성/수정되지 않아야 함",
-				"type": "no_file_changes"
-			},
-			{
-				"text": "Generator 에이전트가 호출되지 않아야 함",
-				"type": "no_agent_call",
-				"pattern": "Generator"
+				"text": "not_applicable must block for code-changing unit/e2e gates",
+				"type": "contains_section",
+				"pattern": "not_applicable.*block"
 			}
 		]
 	},
 	{
 		"eval_id": 3,
-		"eval_name": "do-from-spec",
-		"prompt": "--from-spec docs/specs/2026-03-23-health-check.md",
+		"eval_name": "do-docs-not-applicable",
+		"prompt": "--task-type docs update README",
 		"assertions": [
 			{
-				"text": "Planner가 호출되지 않아야 함",
-				"type": "no_agent_call",
-				"pattern": "Planner"
+				"text": "Docs-only tasks must use audited not_applicable evidence for test gates",
+				"type": "contains_section",
+				"pattern": "metadata.classifierReason"
 			},
 			{
-				"text": "Generator 에이전트가 호출되어야 함",
+				"text": "User approval metadata is required for test non-applicability",
 				"type": "contains_section",
-				"pattern": "Generator 결과"
+				"pattern": "metadata.userApproval"
 			}
 		]
 	},
 	{
 		"eval_id": 4,
-		"eval_name": "claim-gap-detection",
-		"description": "Generator가 파일을 변경했다고 보고했지만 git diff에 반영되지 않은 경우 Gap Detector가 탐지해야 함",
-		"setup": "Generator가 'src/routes/foo.ts 수정' 을 보고하지만 실제 git diff에는 해당 파일이 없는 시나리오",
+		"eval_name": "do-release-profile-block",
+		"prompt": "--profile release prepare release",
 		"assertions": [
 			{
-				"text": "CLAIM_GAP이 Phase 5b 검증 요청에 포함되어야 함",
+				"text": "Release profile must block in MVP",
 				"type": "contains_section",
-				"pattern": "CLAIM_GAP:"
+				"pattern": "not_supported_in_mvp"
 			},
 			{
-				"text": "Gap Detector가 CLAIM_GAP 파일을 우선 조사해야 함",
-				"type": "gap_detector_behavior",
-				"pattern": "CLAIM_GAP 파일 우선 조사"
-			},
-			{
-				"text": "실제 미변경 파일로 인해 RETRY 판정이 나와야 함",
-				"type": "verdict",
-				"pattern": "VERDICT: RETRY"
-			}
-		]
-	},
-	{
-		"eval_id": 5,
-		"eval_name": "spec-completeness-gate",
-		"description": "Design Validator가 Spec 완성도 80% 미달 시 FAIL을 반환해야 함",
-		"setup": "API URL만 있고 Request/Response schema, DB migration, E2E 시나리오가 누락된 Product Spec",
-		"assertions": [
-			{
-				"text": "Design Validator가 Spec 완성도 항목을 검증해야 함",
+				"text": "Release must not silently downgrade to strict",
 				"type": "contains_section",
-				"pattern": "Spec 완성도"
-			},
-			{
-				"text": "완성도 점수가 80% 미만이면 FAIL 판정",
-				"type": "design_validator_behavior",
-				"pattern": "완성도.*FAIL"
-			},
-			{
-				"text": "누락 항목 목록이 출력에 포함되어야 함",
-				"type": "contains_section",
-				"pattern": "누락 항목"
-			},
-			{
-				"text": "Spec 완성도 점수가 Phase 4c 승인 화면에 표시되어야 함",
-				"type": "contains_section",
-				"pattern": "Spec 완성도 점수"
-			}
-		]
-	},
-	{
-		"eval_id": 6,
-		"eval_name": "p2p-regression",
-		"description": "Sprint 2에서 Sprint 1의 P2P_SUITE 테스트가 실패하면 즉시 RETRY 판정이 나와야 함",
-		"setup": "Sprint 1 완료 후 P2P_SUITE 에 test 파일 추가, Sprint 2 Generator가 해당 테스트를 깨는 변경을 수행",
-		"assertions": [
-			{
-				"text": "Sprint 2 검증 시 P2P Gate가 실행되어야 함",
-				"type": "gap_detector_behavior",
-				"pattern": "P2P Gate"
-			},
-			{
-				"text": "P2P 실패 시 matchRate 계산 없이 즉시 RETRY",
-				"type": "verdict",
-				"pattern": "VERDICT: RETRY"
-			},
-			{
-				"text": "Gap Analysis에 P2P 회귀 항목이 포함되어야 함",
-				"type": "contains_section",
-				"pattern": "P2P 회귀:"
+				"pattern": "do not downgrade"
 			}
 		]
 	}
