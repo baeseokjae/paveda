@@ -63,8 +63,10 @@ import {
 	formatProgressMarkdown,
 	formatRunReportHtml,
 	formatRunReportMarkdown,
+	monitorProgress,
 	summarizeProgress,
 	summarizeRunWithProgress,
+	watchProgress,
 } from "./progress/index.js";
 import {
 	approveProjectionOverride,
@@ -604,6 +606,47 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 	}
 
 	if (command === "progress") {
+		const watch = args.includes("--watch");
+		const once = args.includes("--once");
+		const interval = parseOptionalPositiveInteger(readOption(args, "--interval"), "--interval");
+
+		if (watch || once) {
+			const signal = new AbortController();
+			process.on("SIGINT", () => signal.abort());
+
+			const format =
+				readOption(args, "--format") ?? (args.includes("--markdown") ? "markdown" : "json");
+
+			for await (const event of watchProgress({
+				cwd: readOption(args, "--cwd"),
+				runId: requireOption(args, "--run"),
+				dbPath: readOption(args, "--db"),
+				storeScope: parseStoreScope(readOption(args, "--store-scope")),
+				intervalMs: interval,
+				once,
+				signal: signal.signal,
+			})) {
+				if (format === "markdown") {
+					if (!once) {
+						console.clear();
+					}
+					console.log(formatProgressMarkdown(event.progress));
+					if (!event.runCompleted) {
+						console.log(
+							`\nPoll #${event.pollCount} — ${elapsedText(event.elapsedMs)} elapsed (Ctrl+C to stop)`,
+						);
+					}
+				} else {
+					console.log(JSON.stringify(event));
+				}
+
+				if (event.runCompleted || event.type === "error") {
+					break;
+				}
+			}
+			return;
+		}
+
 		const progress = summarizeProgress({
 			cwd: readOption(args, "--cwd"),
 			runId: requireOption(args, "--run"),
@@ -619,16 +662,44 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 	}
 
 	if (command === "monitor") {
-		const progress = summarizeProgress({
+		const interval = parseOptionalPositiveInteger(readOption(args, "--interval"), "--interval");
+		const summaryEvery = parseOptionalPositiveInteger(
+			readOption(args, "--summary-every"),
+			"--summary-every",
+		);
+		const format =
+			readOption(args, "--format") ?? (args.includes("--markdown") ? "markdown" : "json");
+
+		const signal = new AbortController();
+		process.on("SIGINT", () => signal.abort());
+
+		for await (const event of monitorProgress({
 			cwd: readOption(args, "--cwd"),
 			runId: requireOption(args, "--run"),
 			dbPath: readOption(args, "--db"),
 			storeScope: parseStoreScope(readOption(args, "--store-scope")),
-		});
-		if (readOption(args, "--format") === "markdown" || args.includes("--markdown")) {
-			console.log(formatProgressMarkdown(progress));
-		} else {
-			printJson(progress);
+			intervalMs: interval,
+			summaryEvery,
+			signal: signal.signal,
+		})) {
+			if (format === "markdown") {
+				console.clear();
+				console.log(formatProgressMarkdown(event.progress));
+				if (event.changes.length > 0) {
+					console.log(`\nChanges: ${event.changes.map((c) => c.type).join(", ")}`);
+				}
+				if (!event.runCompleted) {
+					console.log(
+						`\nPoll #${event.pollCount} — ${elapsedText(event.elapsedMs)} elapsed (Ctrl+C to stop)`,
+					);
+				}
+			} else {
+				console.log(JSON.stringify(event));
+			}
+
+			if (event.runCompleted || event.type === "error") {
+				break;
+			}
 		}
 		return;
 	}
@@ -645,7 +716,12 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			throw new Error("Missing required option: --write");
 		}
 		assertWritePathIsSafe(out);
-		const format = args.includes("--markdown") ? "markdown" : "html";
+		const explicitMarkdown = args.includes("--markdown");
+		const explicitHtml = args.includes("--html");
+		if (explicitMarkdown && explicitHtml) {
+			throw new Error("Cannot specify both --markdown and --html");
+		}
+		const format = explicitMarkdown ? "markdown" : "html";
 		const output =
 			format === "markdown"
 				? formatRunReportMarkdown(status)
@@ -1279,7 +1355,15 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 		return;
 	}
 
-	if (command === "progress" || command === "handoff" || command === "monitor") {
+	if (command === "monitor") {
+		requireOption(args, "--run");
+		parseOptionalOutputFormat(readOption(args, "--format"));
+		parseOptionalPositiveInteger(readOption(args, "--interval"), "--interval");
+		parseOptionalPositiveInteger(readOption(args, "--summary-every"), "--summary-every");
+		return;
+	}
+
+	if (command === "progress" || command === "handoff") {
 		requireOption(args, "--run");
 		parseOptionalOutputFormat(readOption(args, "--format"));
 		return;
@@ -2543,9 +2627,9 @@ Common flow:
   run <host> [--profile fast|standard|strict|release] [--objective text] [--task-type command|code|ui|api|data|infra|test|docs|metadata|mixed] [--from-spec path] [--acceptance a,b] [--ambiguity-score n] [--changed-files a,b] [--risk-surfaces auth,payment,data,infra,public-api,ui-only,docs-only,mixed] [--cwd path] [--db path] [--store-scope project|user] -- <native command...>
   verify --run uuid-v7 [--profile fast|standard|strict|release] [--stage mechanical|semantic|consensus] [--cwd path] [--write] [--collect] [--report-json path] [--report-junit path] [--report-dir path] [--db path] [--store-scope project|user]
   status --run uuid-v7 [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
-  progress --run uuid-v7 [--watch] [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
-  monitor --run uuid-v7 [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
-  report --run uuid-v7 [--markdown|--html] --write report.md|report.html [--cwd path] [--db path] [--store-scope project|user]
+  progress --run uuid-v7 [--watch [--interval seconds]] [--once] [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
+  monitor --run uuid-v7 [--interval seconds] [--summary-every n] [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
+  report --run uuid-v7 [--html] [--markdown] --write report.md|report.html [--cwd path] [--db path] [--store-scope project|user]
   handoff --run uuid-v7 [--markdown|--format json] [--cwd path] [--db path] [--store-scope project|user]
   evidence --run uuid-v7 [--cwd path] [--db path] [--store-scope project|user]
   evidence collect --run uuid-v7 [--kind unit_test|coverage|semantic_review|...] [--provider id] [--cwd path] [--db path] [--store-scope project|user]
@@ -2607,4 +2691,17 @@ Project utilities:
 Commands that can write project files require --write.
 CLI-generated follow-up and recovery commands use the current CLI path by default.
 `);
+}
+
+function elapsedText(ms: number): string {
+	if (ms < 1000) {
+		return `${ms}ms`;
+	}
+	const seconds = Math.floor(ms / 1000);
+	if (seconds < 60) {
+		return `${seconds}s`;
+	}
+	const minutes = Math.floor(seconds / 60);
+	const remainingSeconds = seconds % 60;
+	return `${minutes}m ${remainingSeconds}s`;
 }

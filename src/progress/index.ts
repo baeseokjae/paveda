@@ -15,6 +15,224 @@ export interface RunProgressOptions {
 	storeScope?: StoreScope;
 }
 
+export interface WatchProgressOptions extends RunProgressOptions {
+	intervalMs?: number;
+	once?: boolean;
+	signal?: AbortSignal;
+}
+
+export interface WatchProgressEvent {
+	type: "snapshot" | "completed" | "error" | "interrupted";
+	progress: RunProgressSummary;
+	pollCount: number;
+	elapsedMs: number;
+	runCompleted: boolean;
+}
+
+function emptyProgress(runId: string, error: unknown): RunProgressSummary {
+	const message = error instanceof Error ? error.message : String(error);
+	return {
+		schemaVersion: 1,
+		runId,
+		status: "blocked",
+		host: null,
+		profile: "standard",
+		taskType: "command",
+		specBinding: null,
+		stagnation: null,
+		currentPhase: null,
+		latestHostEvent: null,
+		stages: [],
+		gates: [
+			{
+				id: "watch-error",
+				phase: "",
+				evidenceKind: "",
+				status: "block",
+				message,
+			},
+		],
+		evidenceGaps: [],
+		nextCommands: [],
+	};
+}
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function* watchProgress(
+	options: WatchProgressOptions,
+): AsyncGenerator<WatchProgressEvent> {
+	const intervalMs = Math.max(options.intervalMs ?? 2000, 500);
+	const startedAt = Date.now();
+	let pollCount = 0;
+
+	while (true) {
+		pollCount += 1;
+
+		try {
+			const progress = summarizeProgress(options);
+			const runCompleted =
+				progress.status === "completed" ||
+				progress.status === "failed" ||
+				progress.status === "blocked";
+
+			yield {
+				type: runCompleted ? "completed" : "snapshot",
+				progress,
+				pollCount,
+				elapsedMs: Date.now() - startedAt,
+				runCompleted,
+			};
+
+			if (runCompleted || options.once) {
+				return;
+			}
+		} catch (error) {
+			yield {
+				type: "error",
+				progress: emptyProgress(options.runId, error),
+				pollCount,
+				elapsedMs: Date.now() - startedAt,
+				runCompleted: false,
+			};
+			return;
+		}
+
+		if (options.signal?.aborted) {
+			try {
+				const progress = summarizeProgress(options);
+				yield {
+					type: "interrupted",
+					progress,
+					pollCount,
+					elapsedMs: Date.now() - startedAt,
+					runCompleted: false,
+				};
+			} catch {
+				// ignore errors during interrupted snapshot
+			}
+			return;
+		}
+
+		await sleep(intervalMs);
+	}
+}
+
+export interface ProgressChangeEvent {
+	type:
+		| "phase_changed"
+		| "gate_changed"
+		| "evidence_changed"
+		| "host_event"
+		| "status_changed"
+		| "stagnation_changed";
+	previous: Partial<RunProgressSummary>;
+	current: RunProgressSummary;
+	ts: number;
+}
+
+export function diffProgress(
+	previous: RunProgressSummary,
+	current: RunProgressSummary,
+): ProgressChangeEvent[] {
+	const changes: ProgressChangeEvent[] = [];
+
+	if (previous.status !== current.status) {
+		changes.push({
+			type: "status_changed",
+			previous: { status: previous.status },
+			current,
+			ts: Date.now(),
+		});
+	}
+
+	const prevPhase = previous.currentPhase?.phaseId;
+	const currPhase = current.currentPhase?.phaseId;
+	if (prevPhase !== currPhase) {
+		changes.push({
+			type: "phase_changed",
+			previous: { currentPhase: previous.currentPhase },
+			current,
+			ts: Date.now(),
+		});
+	}
+
+	for (const gate of current.gates) {
+		const prev = previous.gates.find((g) => g.id === gate.id);
+		if (prev && prev.status !== gate.status) {
+			changes.push({
+				type: "gate_changed",
+				previous: { gates: previous.gates },
+				current,
+				ts: Date.now(),
+			});
+			break;
+		}
+	}
+
+	if (previous.evidenceGaps.length !== current.evidenceGaps.length) {
+		changes.push({
+			type: "evidence_changed",
+			previous: { evidenceGaps: previous.evidenceGaps },
+			current,
+			ts: Date.now(),
+		});
+	}
+
+	if (!previous.stagnation !== !current.stagnation) {
+		changes.push({
+			type: "stagnation_changed",
+			previous: { stagnation: previous.stagnation },
+			current,
+			ts: Date.now(),
+		});
+	}
+
+	return changes;
+}
+
+export interface MonitorProgressOptions extends WatchProgressOptions {
+	summaryEvery?: number;
+}
+
+export interface MonitorProgressEvent extends WatchProgressEvent {
+	changes: ProgressChangeEvent[];
+}
+
+export async function* monitorProgress(
+	options: MonitorProgressOptions,
+): AsyncGenerator<MonitorProgressEvent> {
+	let previous: RunProgressSummary | null = null;
+	const summaryInterval = options.summaryEvery ?? 10;
+	let silentPolls = 0;
+
+	for await (const event of watchProgress(options)) {
+		const changes = previous
+			? diffProgress(previous, event.progress)
+			: [
+					{
+						type: "phase_changed" as const,
+						previous: {},
+						current: event.progress,
+						ts: Date.now(),
+					},
+				];
+
+		const shouldOutput = changes.length > 0 || silentPolls >= summaryInterval || event.runCompleted;
+
+		if (shouldOutput) {
+			silentPolls = 0;
+			yield { ...event, changes };
+		} else {
+			silentPolls += 1;
+		}
+
+		previous = event.progress;
+	}
+}
+
 export interface RunProgressSummary {
 	schemaVersion: 1;
 	runId: string;

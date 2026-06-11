@@ -5,12 +5,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import { addRunEvidence, startPavedaDo, verifyRun } from "../src/execution/index.js";
 import { initializePaveda } from "../src/init/index.js";
 import {
+	diffProgress,
 	formatHandoffMarkdown,
 	formatProgressMarkdown,
 	formatRunReportHtml,
 	formatRunReportMarkdown,
+	monitorProgress,
 	summarizeProgress,
 	summarizeRunWithProgress,
+	watchProgress,
 } from "../src/progress/index.js";
 
 const tempDirs: string[] = [];
@@ -447,3 +450,316 @@ function addIterationEvidence(
 		now: 5_000 + iteration,
 	});
 }
+
+describe("watch progress", () => {
+	it("emits a single event with --once flag", async () => {
+		const cwd = initProject("paveda-watch-once-");
+		const started = startPavedaDo({
+			cwd,
+			host: "codex",
+			profile: "strict",
+			taskType: "code",
+			objective: "Test watch once",
+			now: 1_000,
+		});
+
+		const events: unknown[] = [];
+		for await (const event of watchProgress({
+			cwd,
+			runId: started.run.runId,
+			once: true,
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			type: "snapshot",
+			pollCount: 1,
+			runCompleted: false,
+			progress: expect.objectContaining({
+				runId: started.run.runId,
+				status: "active",
+			}),
+		});
+	});
+
+	it("emits snapshot for active runs", async () => {
+		const cwd = initProject("paveda-watch-active-");
+		const started = startPavedaDo({
+			cwd,
+			host: "codex",
+			profile: "strict",
+			taskType: "code",
+			objective: "Test watch active",
+			now: 1_000,
+		});
+
+		const events: unknown[] = [];
+		for await (const event of watchProgress({
+			cwd,
+			runId: started.run.runId,
+			once: true,
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			type: "snapshot",
+			runCompleted: false,
+		});
+	});
+
+	it("respects custom interval", async () => {
+		const cwd = initProject("paveda-watch-interval-");
+		const started = startPavedaDo({
+			cwd,
+			host: "codex",
+			profile: "strict",
+			taskType: "code",
+			objective: "Test watch interval",
+			now: 1_000,
+		});
+
+		const start = Date.now();
+		const events: unknown[] = [];
+		for await (const event of watchProgress({
+			cwd,
+			runId: started.run.runId,
+			intervalMs: 500,
+			once: true,
+		})) {
+			events.push(event);
+		}
+		const elapsed = Date.now() - start;
+
+		// Should complete quickly (< 1s, no actual sleep for once mode)
+		expect(elapsed).toBeLessThan(1000);
+		expect(events).toHaveLength(1);
+	});
+});
+
+describe("diff progress", () => {
+	it("detects status change", () => {
+		const active: ReturnType<typeof summarizeProgress> = {
+			schemaVersion: 1,
+			runId: "0193a7e2-8f5d-7a6b-9c4e-0d1f2a3b4c5d",
+			status: "active",
+			host: null,
+			profile: "standard",
+			taskType: "code",
+			specBinding: null,
+			stagnation: null,
+			currentPhase: null,
+			latestHostEvent: null,
+			stages: [],
+			gates: [],
+			evidenceGaps: [],
+			nextCommands: [],
+		};
+		const blocked = { ...active, status: "blocked" as const };
+
+		const changes = diffProgress(active, blocked);
+		expect(changes).toEqual([expect.objectContaining({ type: "status_changed" })]);
+	});
+
+	it("detects phase change", () => {
+		const base: ReturnType<typeof summarizeProgress> = {
+			schemaVersion: 1,
+			runId: "0193a7e2-8f5d-7a6b-9c4e-0d1f2a3b4c5d",
+			status: "active",
+			host: null,
+			profile: "standard",
+			taskType: "code",
+			specBinding: null,
+			stagnation: null,
+			currentPhase: null,
+			latestHostEvent: null,
+			stages: [],
+			gates: [],
+			evidenceGaps: [],
+			nextCommands: [],
+		};
+		const withPhase = {
+			...base,
+			currentPhase: {
+				phaseId: "execute",
+				status: "active",
+				eventType: "phase.started",
+				ts: 2_000,
+			},
+		};
+
+		const changes = diffProgress(base, withPhase);
+		expect(changes).toContainEqual(expect.objectContaining({ type: "phase_changed" }));
+	});
+
+	it("detects gate status change", () => {
+		const base: ReturnType<typeof summarizeProgress> = {
+			schemaVersion: 1,
+			runId: "run-1",
+			status: "active",
+			host: null,
+			profile: "standard",
+			taskType: "code",
+			specBinding: null,
+			stagnation: null,
+			currentPhase: null,
+			latestHostEvent: null,
+			stages: [],
+			gates: [
+				{ id: "unit-gate", phase: "", evidenceKind: "unit_test", status: "block", message: "" },
+			],
+			evidenceGaps: [],
+			nextCommands: [],
+		};
+		const changed = {
+			...base,
+			gates: [
+				{ id: "unit-gate", phase: "", evidenceKind: "unit_test", status: "pass", message: "" },
+			],
+		};
+
+		const changes = diffProgress(base, changed);
+		expect(changes).toContainEqual(expect.objectContaining({ type: "gate_changed" }));
+	});
+
+	it("detects stagnation change", () => {
+		const base: ReturnType<typeof summarizeProgress> = {
+			schemaVersion: 1,
+			runId: "run-1",
+			status: "active",
+			host: null,
+			profile: "standard",
+			taskType: "code",
+			specBinding: null,
+			stagnation: null,
+			currentPhase: null,
+			latestHostEvent: null,
+			stages: [],
+			gates: [],
+			evidenceGaps: [],
+			nextCommands: [],
+		};
+		const changed = {
+			...base,
+			stagnation: {
+				pattern: "spinning",
+				phaseId: "execute",
+				iterations: [1, 2, 3],
+				severity: "warning",
+				message: "stagnation detected",
+				recovery: "review",
+				nextCommand: "paveda evidence add",
+			},
+		};
+
+		const changes = diffProgress(base, changed);
+		expect(changes).toContainEqual(expect.objectContaining({ type: "stagnation_changed" }));
+	});
+
+	it("returns no changes for identical snapshots", () => {
+		const base: ReturnType<typeof summarizeProgress> = {
+			schemaVersion: 1,
+			runId: "0193a7e2-8f5d-7a6b-9c4e-0d1f2a3b4c5d",
+			status: "active",
+			host: null,
+			profile: "standard",
+			taskType: "code",
+			specBinding: null,
+			stagnation: null,
+			currentPhase: { phaseId: "intake", status: "active", eventType: "phase.started", ts: 1000 },
+			latestHostEvent: null,
+			stages: [],
+			gates: [
+				{
+					id: "unit-gate",
+					phase: "unit-test",
+					evidenceKind: "unit_test",
+					status: "block",
+					message: "missing",
+				},
+			],
+			evidenceGaps: [
+				{
+					gateId: "unit-gate",
+					phase: "unit-test",
+					evidenceKind: "unit_test",
+					message: "missing",
+					nextCommand: "paveda evidence add",
+				},
+			],
+			nextCommands: ["paveda evidence add"],
+		};
+		const currentPhase = base.currentPhase;
+		const changes = diffProgress(base, {
+			...base,
+			currentPhase: currentPhase ? { ...currentPhase } : null,
+		});
+		expect(changes).toHaveLength(0);
+	});
+});
+
+describe("monitor progress", () => {
+	it("emits initial snapshot on first poll", async () => {
+		const cwd = initProject("paveda-monitor-");
+		const started = startPavedaDo({
+			cwd,
+			host: "codex",
+			profile: "strict",
+			taskType: "code",
+			objective: "Test monitor",
+			now: 1_000,
+		});
+
+		const events: unknown[] = [];
+		for await (const event of monitorProgress({
+			cwd,
+			runId: started.run.runId,
+			once: true,
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({
+			type: "snapshot",
+			changes: [expect.objectContaining({ type: "phase_changed" })],
+		});
+	});
+
+	it("emits events for active run with gate changes", async () => {
+		const cwd = initProject("paveda-monitor-active-");
+		const started = startPavedaDo({
+			cwd,
+			host: "codex",
+			profile: "strict",
+			taskType: "code",
+			objective: "Test monitor active",
+			now: 1_000,
+		});
+
+		addRunEvidence({
+			cwd,
+			runId: started.run.runId,
+			phaseId: "unit-test",
+			evidenceId: "unit-pass",
+			kind: "unit_test",
+			result: "pass",
+			now: 2_000,
+		});
+
+		const events: unknown[] = [];
+		for await (const event of monitorProgress({
+			cwd,
+			runId: started.run.runId,
+			once: true,
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toHaveLength(1);
+		expect(events[0]).toMatchObject({ type: "snapshot", runCompleted: false });
+	});
+});
