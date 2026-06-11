@@ -30,6 +30,8 @@ export * as setup from "./setup/index.js";
 export * as store from "./store/index.js";
 export * as skillLoader from "./skill-loader/index.js";
 export * as router from "./router/index.js";
+export * as scoreEvaluator from "./score-evaluator/index.js";
+export * as workflow from "./workflow/engine.js";
 export * as policy from "./policy/index.js";
 export * as claudeCodeAdapter from "./adapters/claude-code/index.js";
 export * as codexAdapter from "./adapters/codex/index.js";

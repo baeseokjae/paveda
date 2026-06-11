@@ -497,6 +497,14 @@ function listProjectHostFiles(cwd: string): string[] {
 		.sort((left, right) => basename(left).localeCompare(basename(right)));
 }
 
+export function loadScoreMetrics(cwd: string): unknown[] {
+	const contract = readJsonWithFallback<{ scoreMetrics?: unknown[] }>(
+		join(cwd, ".paveda", "contract.json"),
+		join(packageHarnessRoot(), "contracts", "universal-contract.v1.json"),
+	);
+	return Array.isArray(contract.scoreMetrics) ? contract.scoreMetrics : [];
+}
+
 function readJsonWithFallback<T>(projectPath: string, packagePath: string): T {
 	return readJson<T>(existsSync(projectPath) ? projectPath : packagePath);
 }

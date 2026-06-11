@@ -8,12 +8,19 @@ import {
 	assertExecutableProfile,
 	loadHostCapabilities,
 	loadProfileManifest,
+	loadScoreMetrics,
 	parsePavedaProfileValue,
 	validateContractSource,
 } from "../contract/index.js";
 import type { HostSkillBundleTarget } from "../host-bundles/index.js";
 import { parseHostSkillBundleTarget } from "../host-bundles/index.js";
 import { type ProjectionStatusResult, checkProjectionStatus } from "../projection/index.js";
+import {
+	evaluateScoreMetric,
+	type GateSummary,
+	type ScoreMetricDefinition,
+	type ScoreThreshold,
+} from "../score-evaluator/index.js";
 import {
 	type ArtifactRecord,
 	type DecisionRecord,
@@ -211,6 +218,7 @@ export interface VerifyRunResult {
 	ladder: VerifyLadderStepResult[];
 	scoreSummary: VerificationScoreSummary;
 	score: ScoreRecord | null;
+	allScores: ScoreRecord[];
 	policyViolations: PolicyViolationRecord[];
 }
 
@@ -272,6 +280,7 @@ interface RequiredGate {
 	phase?: unknown;
 	evidenceKind?: unknown;
 	requiredForTaskTypes?: unknown;
+	capability?: unknown;
 	missingCapabilityBehavior?: unknown;
 	failureBehavior?: unknown;
 	notApplicablePolicy?: {
@@ -301,11 +310,6 @@ interface ProfileNotApplicablePolicy {
 	requiresClassifierReason: boolean;
 }
 
-interface ScoreThreshold {
-	metric?: unknown;
-	pass?: unknown;
-}
-
 interface HostCapabilityEntry {
 	id: string;
 	support: string;
@@ -322,6 +326,7 @@ interface VerifyGateContext {
 	taskType: PavedaTaskType;
 	profilePolicy: ProfileNotApplicablePolicy;
 	riskSurfaces: RiskSurface[];
+	hostCapabilities: readonly HostCapabilityEntry[];
 }
 
 const DEFAULT_HOST: HostSkillBundleTarget = "codex";
@@ -841,6 +846,8 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 		const stagnation = detectStagnation(run, iterationFingerprints);
 		const manifest = loadProfileManifest(cwd, profile);
 		const profilePolicy = readProfileNotApplicablePolicy(manifest);
+		const hostInfo = run.host ? loadHostCapabilities({ cwd, host: run.host }) : null;
+		const hostCapabilities = (hostInfo?.capabilities ?? []) as HostCapabilityEntry[];
 		const stageFilter = parseOptionalVerificationStage(options.stage);
 		const gates = [
 			...verifySpecBinding({ cwd, profile, run, taskType }),
@@ -855,6 +862,7 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 					taskType,
 					profilePolicy,
 					riskSurfaces,
+					hostCapabilities,
 				}),
 			),
 		];
@@ -928,6 +936,59 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 					ts: now,
 				})
 			: null;
+
+		// Evaluate all contract-defined score metrics
+		const metricDefs = loadScoreMetrics(cwd);
+		const thresholds = (
+			Array.isArray(manifest.scoreThresholds) ? manifest.scoreThresholds : []
+		) as ScoreThreshold[];
+		const gateSummaries: GateSummary[] = gates.map((g) => ({
+			id: g.id,
+			status: g.status,
+			evidenceKind: g.evidenceKind,
+			evidenceIds: g.evidenceIds,
+		}));
+		const phaseEvents = store.listPhaseEvents(run.runId);
+		const phaseCount = new Set(phaseEvents.map((pe) => pe.phaseId)).size;
+		const phaseCompletionRatio =
+			phaseCount > 0
+				? phaseEvents.filter((pe) => pe.status === "completed").length /
+					phaseEvents.length
+				: 0;
+		const scoreContext = {
+			evidence,
+			gates: gateSummaries,
+			scores: store.listScores(run.runId),
+			taskType,
+			riskSurfaces,
+			changedFileCount: readChangedFileCount(run),
+			phaseCompletionRatio,
+		};
+		const allScores: ScoreRecord[] = options.write ? [score].filter(isScoreRecord) : [];
+		for (const rawDef of metricDefs) {
+			const def = asScoreMetricDefinition(rawDef);
+			if (!def) continue;
+			const rawThreshold = thresholds.find((t) => t.metric === def.id);
+			if (!rawThreshold) continue;
+			const threshold = asScoreThreshold(rawThreshold);
+			if (!threshold) continue;
+			// Don't double-record verification_score
+			if (def.id === "verification_score") continue;
+			const result = evaluateScoreMetric(def, threshold, scoreContext);
+			if (options.write) {
+				allScores.push(
+					store.recordScore({
+						runId: run.runId,
+						metric: result.metric,
+						value: result.value,
+						decision: result.decision,
+						threshold: result.threshold,
+						rationale: `score=${result.value.toFixed(3)} kind=${result.kind}`,
+						ts: now,
+					}),
+				);
+			}
+		}
 		if (!ok && options.write) {
 			store.completeRun(run.runId, "blocked", now);
 		}
@@ -943,6 +1004,7 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 			ladder,
 			scoreSummary,
 			score,
+			allScores,
 			policyViolations,
 		};
 	} finally {
@@ -1482,6 +1544,33 @@ function isUiPath(path: string): boolean {
 
 function verifyGate(gate: RequiredGate, context: VerifyGateContext): VerifyGateResult {
 	const evidenceKind = String(gate.evidenceKind);
+	const capability = typeof gate.capability === "string" ? gate.capability : null;
+
+	// Check host capability — block if gate requires a capability that is
+	// explicitly listed as unsupported by the host. If we can't load host
+	// capabilities, or the capability isn't recognized, we let it through.
+	if (capability && context.hostCapabilities.length > 0) {
+		const isUnsupported = context.hostCapabilities.some(
+			(cap) => cap.id === capability && cap.support === "unsupported",
+		);
+		if (isUnsupported) {
+			const behavior = typeof gate.missingCapabilityBehavior === "string"
+				? gate.missingCapabilityBehavior
+				: "block";
+			return {
+				id: String(gate.id),
+				phase: String(gate.phase),
+				evidenceKind,
+				status: "block",
+				message: `Required capability ${capability} is not supported by host.`,
+				evidenceIds: [],
+				recovery: behavior === "ask_setup_sprint"
+					? { action: "ask_setup_sprint", message: `Host does not support ${capability}. Run a setup sprint to add it.` }
+					: buildGateRecovery(gate),
+			};
+		}
+	}
+
 	const matching = context.evidence.filter((item) => item.kind === evidenceKind);
 	const passing = matching.filter((item) => item.result === "pass");
 	if (passing.length > 0) {
@@ -2367,4 +2456,53 @@ function normalizeExitCode(status: number | null, error: Error | undefined): num
 		return status;
 	}
 	return error ? 1 : 0;
+}
+
+function isScoreRecord(value: unknown): value is ScoreRecord {
+	return typeof value === "object" && value !== null && "id" in value;
+}
+
+function asScoreMetricDefinition(value: unknown): ScoreMetricDefinition | null {
+	if (typeof value !== "object" || value === null) return null;
+	const def = value as Record<string, unknown>;
+	if (typeof def.id !== "string") return null;
+	if (typeof def.direction !== "string") return null;
+	if (!def.range || typeof (def.range as Record<string, unknown>).min !== "number" ||
+		typeof (def.range as Record<string, unknown>).max !== "number") return null;
+	if (!def.calculation || typeof (def.calculation as Record<string, unknown>).kind !== "string") return null;
+	const kind = (def.calculation as Record<string, unknown>).kind as string;
+	if (
+		kind !== "evidence_ratio" &&
+		kind !== "threshold_check" &&
+		kind !== "weighted_inputs" &&
+		kind !== "risk_rule" &&
+		kind !== "manual_review" &&
+		kind !== "direct_gate_result"
+	) return null;
+	return def as unknown as ScoreMetricDefinition;
+}
+
+function asScoreThreshold(value: unknown): ScoreThreshold | null {
+	if (typeof value !== "object" || value === null) return null;
+	const t = value as Record<string, unknown>;
+	if (typeof t.metric !== "string") return null;
+	if (typeof t.pass !== "number") return null;
+	if (typeof t.block !== "number") return null;
+	return {
+		metric: t.metric,
+		pass: t.pass,
+		...(typeof t.warn === "number" ? { warn: t.warn } : {}),
+		block: t.block,
+		...(typeof t.repairTrigger === "number" ? { repairTrigger: t.repairTrigger } : {}),
+		...(typeof t.overrideAllowed === "boolean" ? { overrideAllowed: t.overrideAllowed } : {}),
+	};
+}
+
+function readChangedFileCount(run: RunRecord): number {
+	const metadata = asRecord(run.metadata);
+	if (!metadata) return 0;
+	const changedFiles = metadata.changedFiles;
+	if (Array.isArray(changedFiles)) return changedFiles.length;
+	if (typeof changedFiles === "number") return changedFiles;
+	return 0;
 }
