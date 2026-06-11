@@ -384,6 +384,8 @@ async function runCliSmoke(tarballPath) {
 		assertIncludes(help, "run <host>");
 		assertIncludes(help, "verify --run");
 		assertIncludes(help, "progress --run");
+		assertIncludes(help, "monitor --run");
+		assertIncludes(help, "report --run");
 		assertIncludes(help, "handoff --run");
 		assertIncludes(help, "--report-junit path");
 		assertIncludes(help, "evidence collect --run");
@@ -391,6 +393,8 @@ async function runCliSmoke(tarballPath) {
 		assertIncludes(help, "search --query");
 		assertIncludes(help, "artifacts compact --before");
 		assertIncludes(help, "skills install-bundle --host");
+		assertIncludes(help, "skills test <name>");
+		assertIncludes(help, "setup [--host");
 		assertIncludes(help, "runtime-smoke");
 		assertIncludes(help, "policy bundle");
 		assertIncludes(help, "policy pull");
@@ -426,6 +430,23 @@ async function runCliSmoke(tarballPath) {
 
 		const skills = parseJson(runCli(cliPath, ["skills"]), "skills output");
 		assertSkillNames(skills, canonicalSkillNames);
+		const skillEval = parseJson(runCli(cliPath, ["skills", "test", "do"]), "skills test do output");
+		if (
+			skillEval?.ok !== true ||
+			!Array.isArray(skillEval?.cases) ||
+			skillEval.cases.length === 0
+		) {
+			fail("packaged CLI smoke failed: skills test do did not pass deterministic evals");
+		}
+		for (const host of ["codex", "claude-code", "pi", "hermes"]) {
+			const hostSkillEval = parseJson(
+				runCli(cliPath, ["skills", "test", "do", "--host", host]),
+				`skills test do --host ${host} output`,
+			);
+			if (hostSkillEval?.ok !== true || !Array.isArray(hostSkillEval?.cases)) {
+				fail(`packaged CLI smoke failed: host-rendered skills test do failed for ${host}`);
+			}
+		}
 		const unknownSkillsCommand = runCliResult(cliPath, ["skills", "bogus"]);
 		if (
 			unknownSkillsCommand.status !== 1 ||
@@ -1992,6 +2013,7 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 		"markdown",
 	]);
 	assertIncludes(progressStatusMarkdown, "## Evidence Gaps");
+	assertIncludes(progressStatusMarkdown, "## Stages");
 	assertIncludes(progressStatusMarkdown, "unit-gate");
 	const progressOutput = parseJson(
 		runCli(cliPath, ["progress", "--run", runId, "--cwd", projectRoot, "--watch"]),
@@ -2004,6 +2026,49 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 	) {
 		fail("packaged CLI smoke failed: progress did not expose next evidence command");
 	}
+	const monitorOutput = parseJson(
+		runCli(cliPath, ["monitor", "--run", runId, "--cwd", projectRoot]),
+		"monitor output",
+	);
+	if (monitorOutput?.runId !== runId || !Array.isArray(monitorOutput?.stages)) {
+		fail("packaged CLI smoke failed: monitor did not expose run stages");
+	}
+	const reportPath = join(projectRoot, ".paveda-reports", "run-report.html");
+	const reportOutput = parseJson(
+		runCli(cliPath, [
+			"report",
+			"--run",
+			runId,
+			"--cwd",
+			projectRoot,
+			"--html",
+			"--write",
+			reportPath,
+		]),
+		"report output",
+	);
+	if (reportOutput?.ok !== true || reportOutput?.path !== reportPath) {
+		fail("packaged CLI smoke failed: report did not write the requested HTML path");
+	}
+	assertIncludes(readFileSync(reportPath, "utf8"), "Paveda Run");
+	const markdownReportPath = join(projectRoot, ".paveda-reports", "run-report.md");
+	const markdownReportOutput = parseJson(
+		runCli(cliPath, [
+			"report",
+			"--run",
+			runId,
+			"--cwd",
+			projectRoot,
+			"--markdown",
+			"--write",
+			markdownReportPath,
+		]),
+		"markdown report output",
+	);
+	if (markdownReportOutput?.ok !== true || markdownReportOutput?.format !== "markdown") {
+		fail("packaged CLI smoke failed: markdown report did not write successfully");
+	}
+	assertIncludes(readFileSync(markdownReportPath, "utf8"), "## Verification Stages");
 	const handoffMarkdown = runCli(cliPath, [
 		"handoff",
 		"--run",
@@ -2372,9 +2437,16 @@ function assertPackagedPackCli(cliPath, projectRoot, installRoot) {
 	if (verified?.ok !== true || verified?.checkedFiles < 2) {
 		fail("packaged CLI smoke failed: pack verify did not check pack files");
 	}
+	const hostVerified = parseJson(
+		runCli(cliPath, ["pack", "verify", packPath, "--host", "codex"]),
+		"pack verify --host output",
+	);
+	if (hostVerified?.ok !== true || hostVerified?.hostCompatibility?.host !== "codex") {
+		fail("packaged CLI smoke failed: pack verify --host did not report host compatibility");
+	}
 
 	const dryRun = parseJson(
-		runCli(cliPath, ["pack", "install", packPath, "--cwd", installRoot]),
+		runCli(cliPath, ["pack", "install", packPath, "--cwd", installRoot, "--host", "codex"]),
 		"pack install dry-run output",
 	);
 	if (

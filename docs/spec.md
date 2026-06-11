@@ -519,6 +519,48 @@ host compatibility bundle을 포함한다. Host별 산출물은 installer가 생
 
 ---
 
-## 11. 관련 문서
+## 11. Agent Workflow Runtime Policy
+
+### 11.1 Run spec binding
+
+Every code-changing run records a `specBinding` object in run metadata. A
+binding is meaningful when it comes from `--from-spec` or includes non-empty
+`--acceptance` criteria. A generated inline binding with no acceptance criteria
+is treated as missing.
+
+| Policy id | Behavior |
+| --- | --- |
+| `workflow.spec-binding.missing` | `fast` warns; `strict` and `release` block code-changing tasks. |
+| `workflow.spec-binding.drift` | Blocks when a bound spec file hash differs from the recorded hash. |
+| `workflow.spec-binding.ambiguous` | Blocks when ambiguity exceeds the active profile threshold. |
+
+### 11.2 Verification stages
+
+`paveda verify` reports `mechanical`, `semantic`, and `consensus` stages.
+Consensus is required when any trigger is present:
+
+- `profile:release`
+- `risk:auth`, `risk:payment`, `risk:data`, `risk:infra`, `risk:public-api`
+- `public-api:changed`
+- `spec-binding:drift`
+- `semantic:score-below-threshold`
+- `semantic:low-confidence`
+- `verification:repeated-distinct-failures`
+
+`paveda verify --stage <stage>` narrows output to one stage without changing the
+underlying gate evaluation.
+
+### 11.3 Stagnation policy
+
+Iteration fingerprints are stored in `iteration_fingerprints` and can be
+attached through `paveda evidence add --metadata-json`. Paveda detects
+`spinning`, `oscillation`, `no_drift`, and `diminishing_returns`.
+
+`workflow.stagnation.recovery-required` warns in lower profiles and blocks blind
+iteration in `strict` and `release`.
+
+---
+
+## 12. 관련 문서
 
 - 모듈별 동작 요약: [`docs/architecture.md`](./architecture.md).

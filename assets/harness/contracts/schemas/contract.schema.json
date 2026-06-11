@@ -859,6 +859,7 @@
         "scoreThresholds",
         "requiredGates",
         "verificationLadder",
+        "verificationStages",
         "overridePolicy",
         "notApplicablePolicy",
         "releaseSupport"
@@ -905,6 +906,50 @@
             "$ref": "#/$defs/evidenceKind"
           },
           "minItems": 1,
+          "uniqueItems": true
+        },
+        "verificationStages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "stage",
+              "required",
+              "threshold",
+              "triggeredBy"
+            ],
+            "properties": {
+              "stage": {
+                "type": "string",
+                "enum": [
+                  "mechanical",
+                  "semantic",
+                  "consensus"
+                ]
+              },
+              "required": {
+                "type": "boolean"
+              },
+              "threshold": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "triggeredBy": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "uniqueItems": true
+              },
+              "allowNotApplicable": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "minItems": 3,
           "uniqueItems": true
         },
         "overridePolicy": {

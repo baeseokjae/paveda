@@ -32,6 +32,11 @@ describe("reporters", () => {
 		expect(report.nodes).toEqual(
 			expect.arrayContaining([
 				expect.objectContaining({
+					case: "stage:mechanical",
+					status: "block",
+					artifactRefs: ["evidence:12"],
+				}),
+				expect.objectContaining({
 					case: "gate:unit-gate",
 					status: "block",
 					artifactRefs: [],
@@ -43,7 +48,7 @@ describe("reporters", () => {
 				}),
 			]),
 		);
-		expect(junit).toContain('<testsuites tests="2" failures="2" skipped="0">');
+		expect(junit).toContain('<testsuites tests="3" failures="3" skipped="0">');
 		expect(junit).toContain('<failure message="unit evidence missing" type="block">');
 		expect(junit).toContain('<property name="paveda.artifact" value="evidence:12"/>');
 	});
@@ -65,6 +70,46 @@ describe("reporters", () => {
 		expect(readFileSync(join(dir, "verify.junit.xml"), "utf8")).toContain(
 			'<testsuite name="verify:run-1"',
 		);
+	});
+
+	it("renders warning gates without counting them as JUnit failures", () => {
+		const warning = blockedVerification();
+		warning.ok = true;
+		warning.gates = [
+			{
+				id: "spec-binding-gate",
+				policyId: "workflow.spec-binding.missing",
+				phase: "intake",
+				evidenceKind: "spec_binding",
+				status: "warn",
+				message: "fast code-changing run has no stable spec binding",
+				evidenceIds: [],
+				recovery: {
+					action: "repair_then_block",
+					message: "record a spec binding",
+				},
+			},
+		];
+		warning.ladder = [
+			{
+				evidenceKind: "spec_binding",
+				status: "warn",
+				requiredGateIds: ["spec-binding-gate"],
+				evidenceIds: [],
+				message: "One or more non-blocking gates emitted warnings.",
+			},
+		];
+		warning.stages = [];
+		const report = verificationReport(warning, 2_500);
+		const junit = renderJUnit(report);
+
+		expect(report.nodes).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ case: "gate:spec-binding-gate", status: "warn" }),
+				expect.objectContaining({ case: "ladder:spec_binding", status: "warn" }),
+			]),
+		);
+		expect(junit).toContain('<testsuites tests="2" failures="0" skipped="0">');
 	});
 
 	it("renders failed conformance fixtures as JUnit failures", () => {
@@ -124,6 +169,19 @@ function blockedVerification(): VerifyRunResult {
 					action: "record_pass_evidence",
 					message: "record unit evidence",
 				},
+			},
+		],
+		stages: [
+			{
+				stage: "mechanical",
+				result: "block",
+				score: 0,
+				confidence: 0,
+				required: true,
+				triggeredBy: ["verification:deterministic"],
+				evidenceIds: [12],
+				blockingPolicyViolationIds: [],
+				nextCommand: "paveda evidence add --run run-1 --kind unit_test",
 			},
 		],
 		ladder: [

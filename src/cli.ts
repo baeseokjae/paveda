@@ -61,6 +61,8 @@ import {
 import {
 	formatHandoffMarkdown,
 	formatProgressMarkdown,
+	formatRunReportHtml,
+	formatRunReportMarkdown,
 	summarizeProgress,
 	summarizeRunWithProgress,
 } from "./progress/index.js";
@@ -74,6 +76,7 @@ import {
 } from "./projection/index.js";
 import { conformanceReport, verificationReport, writeReports } from "./reporters/index.js";
 import { recordRouteDecision, routeSkill } from "./router/index.js";
+import { runSetup } from "./setup/index.js";
 import {
 	enableSkillRouter,
 	findSkill,
@@ -81,6 +84,7 @@ import {
 	isSkillRouterEnabled,
 	loadSkillStatus,
 	loadSkills,
+	testSkillProcessContract,
 } from "./skill-loader/index.js";
 import type { LoadSkillsOptions } from "./skill-loader/index.js";
 import type {
@@ -185,6 +189,24 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 				write: args.includes("--write"),
 			}),
 		);
+		return;
+	}
+
+	if (command === "setup") {
+		const result = runSetup({
+			cwd: readOption(args, "--cwd"),
+			host: readOption(args, "--host"),
+			all: args.includes("--all"),
+			mode: readOption(args, "--mode"),
+			targetRoot: readOption(args, "--target-root"),
+			write: args.includes("--write"),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+		});
+		printJson(result);
+		if (args.includes("--write") && result.status === "blocked") {
+			process.exitCode = 1;
+		}
 		return;
 	}
 
@@ -387,7 +409,10 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			return;
 		}
 		if (subcommand === "verify") {
-			const result = verifyPack({ path: requirePositional(packArgs, 0, "pack path") });
+			const result = verifyPack({
+				path: requirePositional(packArgs, 0, "pack path"),
+				host: readOption(packArgs, "--host"),
+			});
 			printJson(result);
 			if (!result.ok) {
 				process.exitCode = 1;
@@ -398,6 +423,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			const result = installPack({
 				path: requirePositional(packArgs, 0, "pack path"),
 				cwd: readOption(packArgs, "--cwd"),
+				host: readOption(packArgs, "--host"),
 				write: packArgs.includes("--write"),
 			});
 			printJson(result);
@@ -436,6 +462,11 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			objective,
 			taskType: readOption(args, "--task-type"),
 			acceptanceCriteria: parseOptionalCommaList(readOption(args, "--acceptance")),
+			fromSpec: readOption(args, "--from-spec"),
+			ambiguityScore: parseOptionalNumber(
+				readOption(args, "--ambiguity-score"),
+				"--ambiguity-score",
+			),
 			changedFiles: parseOptionalCommaList(readOption(args, "--changed-files")),
 			riskSurfaces: parseOptionalCommaList(readOption(args, "--risk-surfaces")),
 			dbPath: readOption(args, "--db"),
@@ -459,6 +490,11 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			objective: readOption(runArgs, "--objective"),
 			taskType: readOption(runArgs, "--task-type"),
 			acceptanceCriteria: parseOptionalCommaList(readOption(runArgs, "--acceptance")),
+			fromSpec: readOption(runArgs, "--from-spec"),
+			ambiguityScore: parseOptionalNumber(
+				readOption(runArgs, "--ambiguity-score"),
+				"--ambiguity-score",
+			),
 			nativeArgs,
 			changedFiles: parseOptionalCommaList(readOption(runArgs, "--changed-files")),
 			riskSurfaces: parseOptionalCommaList(readOption(runArgs, "--risk-surfaces")),
@@ -485,6 +521,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			cwd: readOption(args, "--cwd"),
 			runId: requireOption(args, "--run"),
 			profile: parseOptionalPavedaProfile(readOption(args, "--profile")),
+			stage: readOption(args, "--stage"),
 			write: args.includes("--write"),
 			dbPath: readOption(args, "--db"),
 			storeScope: parseStoreScope(readOption(args, "--store-scope")),
@@ -581,6 +618,43 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 		return;
 	}
 
+	if (command === "monitor") {
+		const progress = summarizeProgress({
+			cwd: readOption(args, "--cwd"),
+			runId: requireOption(args, "--run"),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+		});
+		if (readOption(args, "--format") === "markdown" || args.includes("--markdown")) {
+			console.log(formatProgressMarkdown(progress));
+		} else {
+			printJson(progress);
+		}
+		return;
+	}
+
+	if (command === "report") {
+		const status = summarizeRunWithProgress({
+			cwd: readOption(args, "--cwd"),
+			runId: requireOption(args, "--run"),
+			dbPath: readOption(args, "--db"),
+			storeScope: parseStoreScope(readOption(args, "--store-scope")),
+		});
+		const out = readOption(args, "--write") ?? readOption(args, "--out");
+		if (!out) {
+			throw new Error("Missing required option: --write");
+		}
+		assertWritePathIsSafe(out);
+		const format = args.includes("--markdown") ? "markdown" : "html";
+		const output =
+			format === "markdown"
+				? formatRunReportMarkdown(status)
+				: formatRunReportHtml(status.progress, Date.now(), status);
+		writeTextFileSafely(out, output);
+		printJson({ ok: true, runId: status.progress.runId, path: out, format });
+		return;
+	}
+
 	if (command === "handoff") {
 		const progress = summarizeProgress({
 			cwd: readOption(args, "--cwd"),
@@ -599,6 +673,19 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 	if (command === "skills") {
 		if (args[0] === "status") {
 			printJson(loadSkillStatus(readSkillLoadOptions(args)));
+			return;
+		}
+
+		if (args[0] === "test") {
+			const result = testSkillProcessContract({
+				...readSkillLoadOptions(args),
+				name: requirePositional(args, 1, "skill name"),
+				host: readOption(args, "--host"),
+			});
+			printJson(result);
+			if (!result.ok) {
+				process.exitCode = 1;
+			}
 			return;
 		}
 
@@ -1192,9 +1279,17 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 		return;
 	}
 
-	if (command === "progress" || command === "handoff") {
+	if (command === "progress" || command === "handoff" || command === "monitor") {
 		requireOption(args, "--run");
 		parseOptionalOutputFormat(readOption(args, "--format"));
+		return;
+	}
+
+	if (command === "report") {
+		requireOption(args, "--run");
+		if (!readOption(args, "--write") && !readOption(args, "--out")) {
+			throw new Error("Missing required option: --write");
+		}
 		return;
 	}
 
@@ -1454,6 +1549,10 @@ function readDoObjective(args: string[]): string {
 		"--profile",
 		"--task-type",
 		"--acceptance",
+		"--from-spec",
+		"--ambiguity-score",
+		"--changed-files",
+		"--risk-surfaces",
 		"--db",
 		"--store-scope",
 	]);
@@ -2431,19 +2530,22 @@ Hosts:
 
 Common flow:
   init --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--skills do,verify] [--include-optional] [--cli-path /path/to/dist/cli.js] [--profile minimal|standard|strict] [--disabled-hooks selector] [--project-hooks|--no-project-hooks] [--session-start-context on|off] [--session-start-max-chars n] [--write] [--force]
+  setup [--host harness|claude-code|codex|pi|hermes] [--mode lite|managed] [--all] [--cwd path] [--target-root path] [--db path] [--store-scope project|user] [--write]
   contract validate [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--profile fast|standard|strict|release] [--source-only]
   contract compile [--cwd path] [--write]
   contract diff-source [--cwd path]
   contract explain [--cwd path] [--profile fast|standard|strict|release]
   pack build --cwd path --out path.tgz
   pack inspect path.tgz
-  pack verify path.tgz
-  pack install path.tgz --cwd path [--write]
-  do [--host claude-code|codex|pi|hermes] [--profile fast|standard|strict|release] [--task-type code|ui|api|data|infra|test|docs|metadata|mixed] [--changed-files a,b] [--risk-surfaces auth,payment,data,infra,public-api,ui-only,docs-only,mixed] [--acceptance a,b] [--cwd path] [--db path] [--store-scope project|user] "task objective"
-  run <host> [--profile fast|standard|strict|release] [--objective text] [--task-type command|code|ui|api|data|infra|test|docs|metadata|mixed] [--changed-files a,b] [--risk-surfaces auth,payment,data,infra,public-api,ui-only,docs-only,mixed] [--acceptance a,b] [--cwd path] [--db path] [--store-scope project|user] -- <native command...>
-  verify --run uuid-v7 [--profile fast|standard|strict|release] [--cwd path] [--write] [--collect] [--report-json path] [--report-junit path] [--report-dir path] [--db path] [--store-scope project|user]
+  pack verify path.tgz [--host harness|claude-code|codex|pi|hermes]
+  pack install path.tgz --cwd path [--host harness|claude-code|codex|pi|hermes] [--write]
+  do [--host claude-code|codex|pi|hermes] [--profile fast|standard|strict|release] [--task-type code|ui|api|data|infra|test|docs|metadata|mixed] [--from-spec path] [--acceptance a,b] [--ambiguity-score n] [--changed-files a,b] [--risk-surfaces auth,payment,data,infra,public-api,ui-only,docs-only,mixed] [--cwd path] [--db path] [--store-scope project|user] "task objective"
+  run <host> [--profile fast|standard|strict|release] [--objective text] [--task-type command|code|ui|api|data|infra|test|docs|metadata|mixed] [--from-spec path] [--acceptance a,b] [--ambiguity-score n] [--changed-files a,b] [--risk-surfaces auth,payment,data,infra,public-api,ui-only,docs-only,mixed] [--cwd path] [--db path] [--store-scope project|user] -- <native command...>
+  verify --run uuid-v7 [--profile fast|standard|strict|release] [--stage mechanical|semantic|consensus] [--cwd path] [--write] [--collect] [--report-json path] [--report-junit path] [--report-dir path] [--db path] [--store-scope project|user]
   status --run uuid-v7 [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
   progress --run uuid-v7 [--watch] [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
+  monitor --run uuid-v7 [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
+  report --run uuid-v7 [--markdown|--html] --write report.md|report.html [--cwd path] [--db path] [--store-scope project|user]
   handoff --run uuid-v7 [--markdown|--format json] [--cwd path] [--db path] [--store-scope project|user]
   evidence --run uuid-v7 [--cwd path] [--db path] [--store-scope project|user]
   evidence collect --run uuid-v7 [--kind unit_test|coverage|semantic_review|...] [--provider id] [--cwd path] [--db path] [--store-scope project|user]
@@ -2462,6 +2564,7 @@ Common flow:
   doctor [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--policy-cache path] [--enforcement] [--json]
   mcp serve [--cwd path] [--db path] [--store-scope project|user] [--session id]
   skills status [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path]
+  skills test <name> [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path]
   route [--skill do] [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--session id] [--result success|retry|abort] [--tool-retries n] [--verify-failures n] [--ambiguity-score n] [--elapsed-minutes n] [--db path] [--store-scope project|user]
 
 Host setup:

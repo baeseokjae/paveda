@@ -111,6 +111,42 @@ export interface EnableSkillRouterResult {
 	preview: string;
 }
 
+export interface SkillTestOptions extends LoadSkillsOptions {
+	name: string;
+	host?: string;
+}
+
+export interface SkillTestResult {
+	name: string;
+	path: string;
+	evalsPath: string | null;
+	ok: boolean;
+	cases: SkillEvalCaseResult[];
+	issues: SkillTestIssue[];
+}
+
+export interface SkillEvalCaseResult {
+	evalId: number | string;
+	evalName: string;
+	prompt: string;
+	baselineExpectedFailure: string | null;
+	ok: boolean;
+	assertions: SkillEvalAssertionResult[];
+}
+
+export interface SkillEvalAssertionResult {
+	text: string;
+	type: string;
+	pattern: string;
+	ok: boolean;
+	message: string;
+}
+
+export interface SkillTestIssue {
+	code: string;
+	message: string;
+}
+
 interface ParsedSkillDocument {
 	frontmatter: SkillFrontmatter;
 	body: string;
@@ -120,9 +156,40 @@ interface HarnessManifest {
 	skills?: Array<{ name?: string; path?: string }>;
 }
 
+interface SkillEvalContract {
+	schemaVersion: 1;
+	skill: string;
+	cases: SkillEvalCase[];
+}
+
+interface SkillEvalCase {
+	id: string;
+	prompt: string;
+	baselineExpectedFailure?: string;
+	expectedWithSkill?: string[];
+	forbidden?: string[];
+	assertions?: SkillEvalAssertion[];
+}
+
+interface SkillEvalAssertion {
+	text?: string;
+	type: string;
+	pattern: string;
+}
+
 const SKILL_FILENAME = "SKILL.md";
 const PROJECT_SKILL_DIRS = [".harness/skills", ".claude/skills"] as const;
 const USER_SKILL_DIRS = [".harness/skills"] as const;
+const SKILL_EVAL_TOP_LEVEL_KEYS = new Set(["schemaVersion", "skill", "cases"]);
+const SKILL_EVAL_CASE_KEYS = new Set([
+	"id",
+	"prompt",
+	"baselineExpectedFailure",
+	"expectedWithSkill",
+	"forbidden",
+	"assertions",
+]);
+const SKILL_EVAL_ASSERTION_KEYS = new Set(["text", "type", "pattern"]);
 
 export function loadSkills(options: LoadSkillsOptions = {}): LoadedSkill[] {
 	const roots = resolveSkillRoots(options);
@@ -252,6 +319,164 @@ export function enableSkillRouter(options: EnableSkillRouterOptions): EnableSkil
 	};
 }
 
+export function testSkillProcessContract(options: SkillTestOptions): SkillTestResult {
+	const skill = findSkill(loadSkills(options), options.name);
+	if (!skill) {
+		throw new Error(`Unknown skill: ${options.name}`);
+	}
+	const evalsPath = join(dirname(skill.path), "evals", "evals.json");
+	if (!existsSync(evalsPath)) {
+		return {
+			name: skill.name,
+			path: skill.path,
+			evalsPath: null,
+			ok: false,
+			cases: [],
+			issues: [
+				{
+					code: "evals.missing",
+					message: `Skill has no eval contract: ${relative(process.cwd(), evalsPath)}`,
+				},
+			],
+		};
+	}
+	const parsed = JSON.parse(readFileSync(evalsPath, "utf8")) as unknown;
+	const issues: SkillTestIssue[] = [];
+	const contract = parseSkillEvalContract(parsed, skill.name, issues);
+	const skillBody = renderSkillBodyForEvalHost(skill.body, options.host);
+	const cases = contract
+		? contract.cases.map((item, index) => evaluateSkillEvalCase(skillBody, item, index, issues))
+		: [];
+	return {
+		name: skill.name,
+		path: skill.path,
+		evalsPath,
+		ok: issues.length === 0 && cases.every((item) => item.ok),
+		cases,
+		issues,
+	};
+}
+
+function parseSkillEvalContract(
+	value: unknown,
+	skillName: string,
+	issues: SkillTestIssue[],
+): SkillEvalContract | null {
+	if (!isRecord(value) || Array.isArray(value)) {
+		issues.push({ code: "evals.invalid", message: "evals.json must be an object" });
+		return null;
+	}
+	for (const key of Object.keys(value)) {
+		if (!SKILL_EVAL_TOP_LEVEL_KEYS.has(key)) {
+			issues.push({ code: "evals.unknown_field", message: `unknown evals field: ${key}` });
+		}
+	}
+	if (value.schemaVersion !== 1) {
+		issues.push({ code: "evals.schema_version", message: "evals.schemaVersion must be 1" });
+	}
+	if (value.skill !== skillName) {
+		issues.push({
+			code: "evals.skill_mismatch",
+			message: `evals skill must match ${skillName}`,
+		});
+	}
+	if (!Array.isArray(value.cases)) {
+		issues.push({ code: "evals.cases_missing", message: "evals.cases must be an array" });
+		return null;
+	}
+	const seen = new Set<string>();
+	const cases = value.cases
+		.map((item, index) => parseSkillEvalCase(item, index, seen, issues))
+		.filter((item): item is SkillEvalCase => item !== null);
+	return {
+		schemaVersion: 1,
+		skill: typeof value.skill === "string" ? value.skill : skillName,
+		cases,
+	};
+}
+
+function parseSkillEvalCase(
+	value: unknown,
+	index: number,
+	seen: Set<string>,
+	issues: SkillTestIssue[],
+): SkillEvalCase | null {
+	const label = `case-${index + 1}`;
+	if (!isRecord(value) || Array.isArray(value)) {
+		issues.push({ code: "eval.invalid_case", message: `${label} must be an object` });
+		return null;
+	}
+	for (const key of Object.keys(value)) {
+		if (!SKILL_EVAL_CASE_KEYS.has(key)) {
+			issues.push({ code: "eval.unknown_field", message: `${label} has unknown field: ${key}` });
+		}
+	}
+	const id = typeof value.id === "string" && value.id.length > 0 ? value.id : "";
+	if (!id) {
+		issues.push({ code: "eval.id_missing", message: `${label} is missing id` });
+	}
+	if (id && seen.has(id)) {
+		issues.push({ code: "eval.id_duplicate", message: `duplicate eval case id: ${id}` });
+	}
+	if (id) {
+		seen.add(id);
+	}
+	const prompt = typeof value.prompt === "string" ? value.prompt : "";
+	if (!prompt) {
+		issues.push({ code: "eval.prompt_missing", message: `${id || label} is missing prompt` });
+	}
+	const assertions = Array.isArray(value.assertions)
+		? value.assertions
+				.map((assertion, assertionIndex) =>
+					parseSkillEvalAssertion(assertion, id || label, assertionIndex, issues),
+				)
+				.filter((item): item is SkillEvalAssertion => item !== null)
+		: [];
+	return {
+		id: id || label,
+		prompt,
+		...(typeof value.baselineExpectedFailure === "string"
+			? { baselineExpectedFailure: value.baselineExpectedFailure }
+			: {}),
+		expectedWithSkill: readStringArrayField(value.expectedWithSkill),
+		forbidden: readStringArrayField(value.forbidden),
+		assertions,
+	};
+}
+
+function parseSkillEvalAssertion(
+	value: unknown,
+	caseId: string,
+	index: number,
+	issues: SkillTestIssue[],
+): SkillEvalAssertion | null {
+	const label = `${caseId}/assertion-${index + 1}`;
+	if (!isRecord(value) || Array.isArray(value)) {
+		issues.push({ code: "eval.invalid_assertion", message: `${label} must be an object` });
+		return null;
+	}
+	for (const key of Object.keys(value)) {
+		if (!SKILL_EVAL_ASSERTION_KEYS.has(key)) {
+			issues.push({
+				code: "eval.unknown_assertion_field",
+				message: `${label} has unknown field: ${key}`,
+			});
+		}
+	}
+	if (typeof value.type !== "string") {
+		issues.push({ code: "eval.assertion_type_missing", message: `${label} is missing type` });
+	}
+	if (typeof value.pattern !== "string") {
+		issues.push({ code: "eval.pattern_missing", message: `${label} is missing pattern` });
+		return null;
+	}
+	return {
+		...(typeof value.text === "string" ? { text: value.text } : {}),
+		type: typeof value.type === "string" ? value.type : "",
+		pattern: value.pattern,
+	};
+}
+
 export function resolveSkillRoots(options: LoadSkillsOptions = {}): SkillRoot[] {
 	const cwd = options.cwd ?? process.cwd();
 	const projectRoots = options.projectRoots ?? PROJECT_SKILL_DIRS.map((path) => join(cwd, path));
@@ -265,6 +490,167 @@ export function resolveSkillRoots(options: LoadSkillsOptions = {}): SkillRoot[] 
 		...userRoots.map((path) => ({ scope: "user" as const, path })),
 		...builtinRoots.map((path) => ({ scope: "builtin" as const, path })),
 	];
+}
+
+function evaluateSkillEvalCase(
+	skillBody: string,
+	value: SkillEvalCase,
+	index: number,
+	issues: SkillTestIssue[],
+): SkillEvalCaseResult {
+	const evalName = value.id || `eval-${index + 1}`;
+	const expectedAssertions = (value.expectedWithSkill ?? []).map((pattern, assertionIndex) => ({
+		text: `expectedWithSkill:${assertionIndex + 1}`,
+		type: "contains_section",
+		pattern,
+	}));
+	const forbiddenAssertions = (value.forbidden ?? []).map((pattern, assertionIndex) => ({
+		text: `forbidden:${assertionIndex + 1}`,
+		type: "forbidden",
+		pattern,
+	}));
+	const assertions = [...expectedAssertions, ...forbiddenAssertions, ...(value.assertions ?? [])];
+	if (assertions.length === 0) {
+		issues.push({ code: "eval.assertions_missing", message: `${evalName} has no assertions` });
+	}
+	const assertionResults = assertions.map((assertion, assertionIndex) =>
+		evaluateSkillEvalAssertion(skillBody, evalName, assertion, assertionIndex, issues),
+	);
+	return {
+		evalId: value.id,
+		evalName,
+		prompt: value.prompt,
+		baselineExpectedFailure: value.baselineExpectedFailure ?? null,
+		ok: assertionResults.every((assertion) => assertion.ok),
+		assertions: assertionResults,
+	};
+}
+
+function evaluateSkillEvalAssertion(
+	skillBody: string,
+	evalName: string,
+	value: SkillEvalAssertion,
+	index: number,
+	issues: SkillTestIssue[],
+): SkillEvalAssertionResult {
+	const text = value.text ?? `assertion-${index + 1}`;
+	const type = value.type;
+	const pattern = value.pattern;
+	if (type !== "contains_section" && type !== "match_format" && type !== "forbidden") {
+		issues.push({
+			code: "eval.unknown_assertion_type",
+			message: `${evalName}/${text} has unsupported assertion type: ${type}`,
+		});
+	}
+	if (pattern.length === 0) {
+		issues.push({
+			code: "eval.pattern_missing",
+			message: `${evalName}/${text} is missing pattern`,
+		});
+		return { text, type, pattern, ok: false, message: "missing pattern" };
+	}
+	let matcher: RegExp;
+	try {
+		matcher = new RegExp(pattern, "im");
+	} catch (error) {
+		issues.push({
+			code: "eval.pattern_invalid",
+			message: `${evalName}/${text} has invalid pattern: ${
+				error instanceof Error ? error.message : String(error)
+			}`,
+		});
+		return { text, type, pattern, ok: false, message: "invalid pattern" };
+	}
+	if (type === "contains_section") {
+		const ok = matcher.test(skillBody);
+		return {
+			text,
+			type,
+			pattern,
+			ok,
+			message: ok ? "pattern found in skill body" : "pattern missing from skill body",
+		};
+	}
+	if (type === "forbidden") {
+		const ok = !matcher.test(skillBody);
+		return {
+			text,
+			type,
+			pattern,
+			ok,
+			message: ok ? "forbidden pattern absent from skill body" : "forbidden pattern found",
+		};
+	}
+	return {
+		text,
+		type,
+		pattern,
+		ok: true,
+		message: "format assertion pattern is valid",
+	};
+}
+
+function readStringArrayField(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string")
+		: [];
+}
+
+function renderSkillBodyForEvalHost(input: string, host: string | undefined): string {
+	if (!host) {
+		return input;
+	}
+	const hostRoot = hostSkillRoot(host);
+	const hostProjectDir = hostRoot.slice(0, hostRoot.lastIndexOf("/"));
+	const instructionFile = hostInstructionFile(host);
+	const projectRootSkillRoot = "${PROJECT_ROOT}/".concat(hostRoot);
+	return input
+		.replaceAll("${PROJECT_ROOT}/.harness/skills", projectRootSkillRoot)
+		.replaceAll("${PROJECT_ROOT}/.claude/skills", projectRootSkillRoot)
+		.replaceAll(".harness/skills", hostRoot)
+		.replaceAll(".claude/skills", hostRoot)
+		.replaceAll(".harness/context-modules", `${hostProjectDir}/context-modules`)
+		.replaceAll(".claude/context-modules", `${hostProjectDir}/context-modules`)
+		.replaceAll(".harness/AGENTS.md", instructionFile)
+		.replaceAll(".claude/CLAUDE.md", instructionFile);
+}
+
+function hostSkillRoot(host: string): string {
+	switch (host) {
+		case "harness":
+			return ".harness/skills";
+		case "claude-code":
+			return ".claude/skills";
+		case "codex":
+			return ".codex/skills";
+		case "pi":
+			return ".pi/skills";
+		case "hermes":
+			return ".hermes/skills";
+		default:
+			throw new Error(`Invalid skill eval host: ${host}`);
+	}
+}
+
+function hostInstructionFile(host: string): string {
+	switch (host) {
+		case "harness":
+			return ".harness/AGENTS.md";
+		case "claude-code":
+			return ".claude/CLAUDE.md";
+		case "codex":
+			return "AGENTS.md";
+		case "pi":
+			return ".pi/AGENTS.md";
+		case "hermes":
+			return ".hermes/AGENTS.md";
+		default:
+			throw new Error(`Invalid skill eval host: ${host}`);
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 function loadSkillCandidates(options: LoadSkillsOptions = {}): LoadedSkill[] {

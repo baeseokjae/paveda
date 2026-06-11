@@ -238,6 +238,32 @@ ambiguity = 1 - (0.5 × goal_clarity + 0.3 × constraint_clarity + 0.2 × ontolo
 Instinct records are EventStore-local operating patterns. They are managed with
 `paveda instincts add`, `paveda instincts`, and `paveda instincts set-status`.
 
-## 10. 관련 문서
+## 10. Verification And Pack Policy Architecture
+
+Verification is a runtime policy surface, not a host-native planner. `verifyRun`
+collects gates, evidence, policy violations, and scores from EventStore, then
+projects them into three stage summaries:
+
+- `mechanical`: deterministic command and test evidence.
+- `semantic`: semantic review, acceptance fit, goal alignment, and drift review.
+- `consensus`: risk, security, conformance, release signoff, and adversarial
+  review evidence.
+
+The consensus stage is trigger-driven. Release profile, high-risk surfaces, spec
+drift, low semantic score or confidence, public API changes, and repeated
+distinct verification failures all add explicit `triggeredBy` labels. This keeps
+low-risk standard work mechanical unless policy evidence requires a stronger
+review stage.
+
+Packs are deterministic archives plus policy metadata. `pack inspect` is
+host-neutral. `pack verify --host <host>` and `pack install --host <host>` compare
+declared pack capabilities with the target host capability model before writing
+files. Unsupported capabilities block install.
+
+Skill evals are versioned process contracts. `skills test <name>` validates the
+eval schema, expected markers, forbidden markers, and host-rendered skill text so
+host bundle rendering cannot silently remove required workflow language.
+
+## 11. 관련 문서
 
 - 전체 spec: [`docs/spec.md`](./spec.md)

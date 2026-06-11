@@ -33,7 +33,7 @@ process.emitWarning = ((warning: unknown, ...rest: unknown[]): void => {
 const { DatabaseSync: SqliteDatabaseSync } = require("node:sqlite") as typeof import("node:sqlite");
 process.emitWarning = __originalEmitWarning;
 
-export const CURRENT_SCHEMA_VERSION = 4;
+export const CURRENT_SCHEMA_VERSION = 5;
 export const DEFAULT_SQLITE_BUSY_TIMEOUT_MS = 5000;
 export const DEFAULT_STORE_OPEN_RETRIES = 8;
 export const DEFAULT_STORE_OPEN_RETRY_DELAY_MS = 100;
@@ -464,6 +464,31 @@ export interface RecordLearningPatternInput {
 	ts?: number;
 }
 
+export interface RecordIterationFingerprintInput {
+	runId: string;
+	phaseId: string;
+	iteration: number;
+	outputHash?: string | null;
+	diffHash?: string | null;
+	failureFingerprint?: string | null;
+	verificationScore?: number | null;
+	taxonomy?: string[];
+	ts?: number;
+}
+
+export interface IterationFingerprintRecord {
+	id: number;
+	runId: string;
+	phaseId: string;
+	iteration: number;
+	outputHash: string | null;
+	diffHash: string | null;
+	failureFingerprint: string | null;
+	verificationScore: number | null;
+	taxonomy: string[];
+	ts: number;
+}
+
 export interface UpdateLearningPatternStateInput {
 	id: number;
 	state: LearningState;
@@ -677,6 +702,19 @@ type LearningPatternRow = {
 	promoted_at: number | null;
 	retired_at: number | null;
 	metadata: string | null;
+	ts: number;
+};
+
+type IterationFingerprintRow = {
+	id: number;
+	run_id: string;
+	phase_id: string;
+	iteration: number;
+	output_hash: string | null;
+	diff_hash: string | null;
+	failure_fingerprint: string | null;
+	verification_score: number | null;
+	taxonomy: string | null;
 	ts: number;
 };
 
@@ -944,6 +982,28 @@ const STORE_MIGRATIONS: readonly StoreMigration[] = [
 				ref_id UNINDEXED,
 				body
 			);
+		`,
+	},
+	{
+		version: 5,
+		name: "iteration_fingerprints",
+		sql: `
+			CREATE TABLE IF NOT EXISTS iteration_fingerprints (
+				id INTEGER PRIMARY KEY,
+				run_id TEXT NOT NULL,
+				phase_id TEXT NOT NULL,
+				iteration INTEGER NOT NULL,
+				output_hash TEXT,
+				diff_hash TEXT,
+				failure_fingerprint TEXT,
+				verification_score REAL,
+				taxonomy TEXT,
+				ts INTEGER NOT NULL,
+				UNIQUE(run_id, phase_id, iteration),
+				FOREIGN KEY(run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+			);
+			CREATE INDEX IF NOT EXISTS idx_iteration_fingerprints_run ON iteration_fingerprints(run_id, phase_id, iteration);
+			CREATE INDEX IF NOT EXISTS idx_iteration_fingerprints_failure ON iteration_fingerprints(run_id, failure_fingerprint, ts);
 		`,
 	},
 ];
@@ -1833,6 +1893,66 @@ export class EventStore {
 		);
 	}
 
+	recordIterationFingerprint(input: RecordIterationFingerprintInput): IterationFingerprintRecord {
+		assertUuidV7(input.runId, "Run id");
+		assertNonEmptyString(input.phaseId, "Phase id");
+		assertPositiveInteger(input.iteration, "Iteration");
+		if (
+			input.outputHash === undefined &&
+			input.diffHash === undefined &&
+			input.failureFingerprint === undefined &&
+			input.verificationScore === undefined
+		) {
+			throw new Error("Iteration fingerprint must include at least one signal");
+		}
+		if (input.verificationScore !== undefined && input.verificationScore !== null) {
+			assertConfidence(input.verificationScore, "Verification score");
+		}
+		this.assertRunExists(input.runId);
+		const ts = input.ts ?? Date.now();
+		assertFiniteTimestamp(ts, "Iteration fingerprint timestamp");
+		this.database
+			.prepare(
+				[
+					"INSERT INTO iteration_fingerprints",
+					"(run_id, phase_id, iteration, output_hash, diff_hash, failure_fingerprint, verification_score, taxonomy, ts)",
+					"VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"ON CONFLICT(run_id, phase_id, iteration) DO UPDATE SET",
+					"output_hash = excluded.output_hash,",
+					"diff_hash = excluded.diff_hash,",
+					"failure_fingerprint = excluded.failure_fingerprint,",
+					"verification_score = excluded.verification_score,",
+					"taxonomy = excluded.taxonomy,",
+					"ts = excluded.ts",
+				].join(" "),
+			)
+			.run(
+				input.runId,
+				input.phaseId,
+				input.iteration,
+				input.outputHash ?? null,
+				input.diffHash ?? null,
+				input.failureFingerprint ?? null,
+				input.verificationScore ?? null,
+				jsonStringify(input.taxonomy ?? []),
+				ts,
+			);
+		this.touchRun(input.runId, ts);
+
+		return (
+			this.getIterationFingerprint(input.runId, input.phaseId, input.iteration) ??
+			failRead("iteration fingerprint", String(input.iteration))
+		);
+	}
+
+	listIterationFingerprints(runId: string): IterationFingerprintRecord[] {
+		assertUuidV7(runId, "Run id");
+		const rows = this.database
+			.prepare("SELECT * FROM iteration_fingerprints WHERE run_id = ? ORDER BY phase_id, iteration")
+			.all(runId) as IterationFingerprintRow[];
+		return rows.map(mapIterationFingerprintRow);
+	}
+
 	listLearningPatterns(options: ListLearningPatternsOptions = {}): LearningPatternRecord[] {
 		const conditions: string[] = [];
 		const values: Array<number | string> = [];
@@ -2216,6 +2336,22 @@ export class EventStore {
 		return row ? mapLearningPatternRow(row) : null;
 	}
 
+	private getIterationFingerprint(
+		runId: string,
+		phaseId: string,
+		iteration: number,
+	): IterationFingerprintRecord | null {
+		assertUuidV7(runId, "Run id");
+		assertNonEmptyString(phaseId, "Phase id");
+		assertPositiveInteger(iteration, "Iteration");
+		const row = this.database
+			.prepare(
+				"SELECT * FROM iteration_fingerprints WHERE run_id = ? AND phase_id = ? AND iteration = ?",
+			)
+			.get(runId, phaseId, iteration) as IterationFingerprintRow | undefined;
+		return row ? mapIterationFingerprintRow(row) : null;
+	}
+
 	private getPolicyViolation(id: number): PolicyViolationRecord | null {
 		const row = this.database.prepare("SELECT * FROM policy_violations WHERE id = ?").get(id) as
 			| PolicyViolationRow
@@ -2555,6 +2691,24 @@ function mapLearningPatternRow(row: LearningPatternRow): LearningPatternRecord {
 		promotedAt: row.promoted_at,
 		retiredAt: row.retired_at,
 		metadata: parseNullableJson(row.metadata),
+		ts: row.ts,
+	};
+}
+
+function mapIterationFingerprintRow(row: IterationFingerprintRow): IterationFingerprintRecord {
+	const taxonomy = parseNullableJson(row.taxonomy);
+	return {
+		id: row.id,
+		runId: row.run_id,
+		phaseId: row.phase_id,
+		iteration: row.iteration,
+		outputHash: row.output_hash,
+		diffHash: row.diff_hash,
+		failureFingerprint: row.failure_fingerprint,
+		verificationScore: row.verification_score,
+		taxonomy: Array.isArray(taxonomy)
+			? taxonomy.filter((item): item is string => typeof item === "string")
+			: [],
 		ts: row.ts,
 	};
 }

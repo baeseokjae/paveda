@@ -119,6 +119,10 @@ Expected results:
 - `paveda skills` loads the packaged builtin core harness skills, including
   `/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, and
   `/surgical-edits`.
+- `skills test do` validates the versioned eval schema and deterministic process
+  contract assertions.
+- `skills test do --host codex|claude-code|pi|hermes` validates host-rendered
+  skill text so required policy language survives bundle rendering.
 - Optional portable skills such as `/docs-writer`, `/review`,
   `/browser-validate`, and `/dead-code` are packaged and install only when
   requested through `--include-optional` or explicit `--skills`.
@@ -182,6 +186,13 @@ Expected results:
   command is available.
 - `route --ambiguity-score 0.25` returns `blocked: true` with
   `reason: "blocked:ambiguity"`.
+- `verify --stage mechanical|semantic|consensus` reports stage-level status and
+  consensus trigger labels.
+- Release verification cannot pass with only mechanical evidence; release gates
+  still require semantic, risk/security, signoff, conformance, and immutable
+  artifact evidence.
+- `pack verify --host <host>` reports host compatibility, and `pack install
+  --host <host>` blocks unsupported pack capabilities before writing files.
 
 ## Adoption Check
 

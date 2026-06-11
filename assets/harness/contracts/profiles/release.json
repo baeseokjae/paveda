@@ -383,6 +383,42 @@
     "trace",
     "screenshot"
   ],
+  "verificationStages": [
+    {
+      "stage": "mechanical",
+      "required": true,
+      "threshold": 1,
+      "triggeredBy": [
+        "verification:deterministic"
+      ],
+      "allowNotApplicable": false
+    },
+    {
+      "stage": "semantic",
+      "required": true,
+      "threshold": 1,
+      "triggeredBy": [
+        "verification:semantic"
+      ],
+      "allowNotApplicable": false
+    },
+    {
+      "stage": "consensus",
+      "required": true,
+      "threshold": 1,
+      "triggeredBy": [
+        "profile:release",
+        "risk:auth",
+        "risk:payment",
+        "risk:data",
+        "risk:infra",
+        "risk:public-api",
+        "semantic:low-confidence",
+        "spec-binding:drift"
+      ],
+      "allowNotApplicable": false
+    }
+  ],
   "overridePolicy": {
     "allowedModes": [
       "import",

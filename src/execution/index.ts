@@ -1,5 +1,7 @@
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { relative, resolve } from "node:path";
 import { type CodexGoalHandoff, buildCodexGoalHandoff } from "../adapters/codex/index.js";
 import {
 	type ContractValidationResult,
@@ -19,6 +21,7 @@ import {
 	type EvidenceRecord,
 	type EvidenceResult,
 	type HostEventRecord,
+	type IterationFingerprintRecord,
 	type PavedaProfile,
 	type PhaseEventRecord,
 	type PolicyViolationRecord,
@@ -57,6 +60,8 @@ export interface StartPavedaDoOptions {
 	objective: string;
 	taskType?: PavedaTaskType | string;
 	acceptanceCriteria?: string[];
+	fromSpec?: string;
+	ambiguityScore?: number;
 	changedFiles?: string[];
 	riskSurfaces?: RiskSurface[] | string[];
 	dbPath?: string;
@@ -100,6 +105,8 @@ export interface RunHostCommandOptions {
 	objective?: string;
 	taskType?: PavedaTaskType | string;
 	acceptanceCriteria?: string[];
+	fromSpec?: string;
+	ambiguityScore?: number;
 	nativeArgs: string[];
 	changedFiles?: string[];
 	riskSurfaces?: RiskSurface[] | string[];
@@ -148,13 +155,45 @@ export interface RunStatusResult {
 	hostEvents: HostEventRecord[];
 	scores: ScoreRecord[];
 	decisions: DecisionRecord[];
+	iterationFingerprints: IterationFingerprintRecord[];
+	stagnation: StagnationState | null;
 	policyViolations: PolicyViolationRecord[];
+}
+
+export type StagnationPattern = "spinning" | "oscillation" | "no_drift" | "diminishing_returns";
+
+export interface StagnationState {
+	pattern: StagnationPattern;
+	runId: string;
+	phaseId: string;
+	iterations: number[];
+	severity: "warning" | "block";
+	policyId: "workflow.stagnation.recovery-required";
+	message: string;
+	recovery: string;
+	nextCommand: string;
+}
+
+export type RunSpecBindingSourceType = "inline" | "spec_file" | "contract_source" | "host_goal";
+
+export interface RunSpecBinding {
+	schemaVersion: 1;
+	bindingId: string;
+	sourceType: RunSpecBindingSourceType;
+	sourcePath?: string;
+	specSha256?: string;
+	acceptanceSha256: string;
+	ambiguityScore?: number;
+	contractVersion?: string;
+	profile: PavedaProfile;
+	createdAt: number;
 }
 
 export interface VerifyRunOptions {
 	cwd?: string;
 	runId: string;
 	profile?: PavedaProfile | string;
+	stage?: VerificationStage | string;
 	write?: boolean;
 	dbPath?: string;
 	storeScope?: StoreScope;
@@ -168,17 +207,33 @@ export interface VerifyRunResult {
 	taskType: PavedaTaskType;
 	ok: boolean;
 	gates: VerifyGateResult[];
+	stages: VerificationStageResult[];
 	ladder: VerifyLadderStepResult[];
 	scoreSummary: VerificationScoreSummary;
 	score: ScoreRecord | null;
 	policyViolations: PolicyViolationRecord[];
 }
 
+export type VerificationStage = "mechanical" | "semantic" | "consensus";
+
+export interface VerificationStageResult {
+	stage: VerificationStage;
+	result: EvidenceResult;
+	score?: number;
+	confidence?: number;
+	required: boolean;
+	triggeredBy: string[];
+	evidenceIds: number[];
+	blockingPolicyViolationIds: number[];
+	nextCommand?: string;
+}
+
 export interface VerifyGateResult {
 	id: string;
+	policyId?: string;
 	phase: string;
 	evidenceKind: string;
-	status: "pass" | "block" | "not_applicable";
+	status: "pass" | "warn" | "block" | "not_applicable";
 	message: string;
 	evidenceIds: number[];
 	recovery: VerifyGateRecovery | null;
@@ -195,7 +250,7 @@ export interface VerifyGateRecovery {
 
 export interface VerifyLadderStepResult {
 	evidenceKind: string;
-	status: "pass" | "block" | "not_applicable" | "not_required";
+	status: "pass" | "warn" | "block" | "not_applicable" | "not_required";
 	requiredGateIds: string[];
 	evidenceIds: number[];
 	message: string;
@@ -232,6 +287,7 @@ interface ProfileManifest {
 	requiredGates?: unknown[];
 	scoreThresholds?: unknown[];
 	verificationLadder?: unknown[];
+	verificationStages?: unknown[];
 	notApplicablePolicy?: {
 		allowedTaskTypes?: unknown;
 		requiresRationale?: unknown;
@@ -287,6 +343,14 @@ export function startPavedaDo(options: StartPavedaDoOptions): StartPavedaDoResul
 
 	try {
 		const hostNativePrimitive = readHostNativePrimitive(host);
+		const specBinding = buildRunSpecBinding({
+			cwd,
+			sourcePath: options.fromSpec,
+			acceptanceCriteria: options.acceptanceCriteria ?? [],
+			ambiguityScore: options.ambiguityScore,
+			profile,
+			createdAt: now,
+		});
 		const run = store.createRun({
 			objective: options.objective,
 			acceptanceCriteria: options.acceptanceCriteria ?? [],
@@ -298,6 +362,9 @@ export function startPavedaDo(options: StartPavedaDoOptions): StartPavedaDoResul
 				hostNativePrimitive,
 				changedFiles: options.changedFiles ?? [],
 				riskSurfaces: normalizeRiskSurfaces(options.riskSurfaces),
+			},
+			metadata: {
+				specBinding,
 			},
 			ts: now,
 		});
@@ -316,6 +383,14 @@ export function startPavedaDo(options: StartPavedaDoOptions): StartPavedaDoResul
 			eventType: "run.created",
 			status: "completed",
 			payload: { taskType, profile, host },
+			ts: now,
+		});
+		store.recordDecision({
+			runId: run.runId,
+			phaseId: "intake",
+			decisionType: "workflow.spec-binding.recorded",
+			decision: specBinding.bindingId,
+			rationale: "Run bound to spec and acceptance criteria at intake.",
 			ts: now,
 		});
 		const hostNative = recordHostNativeStart(store, {
@@ -493,9 +568,18 @@ export function runHostCommand(options: RunHostCommandOptions): RunHostCommandRe
 	);
 
 	try {
+		const acceptanceCriteria = options.acceptanceCriteria ?? [];
+		const specBinding = buildRunSpecBinding({
+			cwd,
+			sourcePath: options.fromSpec,
+			acceptanceCriteria,
+			ambiguityScore: options.ambiguityScore,
+			profile,
+			createdAt: now,
+		});
 		const run = store.createRun({
 			objective: options.objective ?? options.nativeArgs.join(" "),
-			acceptanceCriteria: options.acceptanceCriteria ?? [],
+			acceptanceCriteria,
 			profile,
 			host,
 			context: {
@@ -504,6 +588,9 @@ export function runHostCommand(options: RunHostCommandOptions): RunHostCommandRe
 				command: options.nativeArgs,
 				changedFiles: options.changedFiles ?? [],
 				riskSurfaces: normalizeRiskSurfaces(options.riskSurfaces),
+			},
+			metadata: {
+				specBinding,
 			},
 			ts: now,
 		});
@@ -529,6 +616,14 @@ export function runHostCommand(options: RunHostCommandOptions): RunHostCommandRe
 			eventType: "command.started",
 			normalizedStatus: "active",
 			payload: { command: options.nativeArgs },
+			ts: now,
+		});
+		store.recordDecision({
+			runId: run.runId,
+			phaseId: "execute",
+			decisionType: "workflow.spec-binding.recorded",
+			decision: specBinding.bindingId,
+			rationale: "Run bound to spec and acceptance criteria before native command execution.",
 			ts: now,
 		});
 
@@ -640,7 +735,7 @@ export function addRunEvidence(options: AddEvidenceOptions): EvidenceRecord {
 		options.dbPath ?? resolveStorePath(options.storeScope ?? "project", cwd),
 	);
 	try {
-		return store.recordEvidence({
+		const evidence = store.recordEvidence({
 			runId: options.runId,
 			phaseId: options.phaseId ?? null,
 			evidenceId: options.evidenceId,
@@ -653,6 +748,21 @@ export function addRunEvidence(options: AddEvidenceOptions): EvidenceRecord {
 			metadata: options.metadata,
 			ts: options.now ?? Date.now(),
 		});
+		const fingerprint = readIterationFingerprintMetadata(options.metadata);
+		if (fingerprint) {
+			store.recordIterationFingerprint({
+				runId: options.runId,
+				phaseId: fingerprint.phaseId ?? options.phaseId ?? "execute",
+				iteration: fingerprint.iteration,
+				outputHash: fingerprint.outputHash,
+				diffHash: fingerprint.diffHash,
+				failureFingerprint: fingerprint.failureFingerprint,
+				verificationScore: fingerprint.verificationScore,
+				taxonomy: fingerprint.taxonomy,
+				ts: options.now ?? Date.now(),
+			});
+		}
+		return evidence;
 	} finally {
 		store.close();
 	}
@@ -673,6 +783,8 @@ export function summarizeRun(options: {
 		if (!run) {
 			throw new Error(`Run does not exist: ${options.runId}`);
 		}
+		const iterationFingerprints = store.listIterationFingerprints(options.runId);
+		const stagnation = detectStagnation(run, iterationFingerprints);
 		return {
 			run,
 			phaseEvents: store.listPhaseEvents(options.runId),
@@ -681,6 +793,8 @@ export function summarizeRun(options: {
 			hostEvents: store.listHostEvents(options.runId),
 			scores: store.listScores(options.runId),
 			decisions: store.listDecisions(options.runId),
+			iterationFingerprints,
+			stagnation,
 			policyViolations: store.listPolicyViolations(options.runId),
 		};
 	} finally {
@@ -723,40 +837,75 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 		const artifacts = store.listArtifacts(run.runId);
 		const hostEvents = store.listHostEvents(run.runId);
 		const decisions = store.listDecisions(run.runId);
+		const iterationFingerprints = store.listIterationFingerprints(run.runId);
+		const stagnation = detectStagnation(run, iterationFingerprints);
 		const manifest = loadProfileManifest(cwd, profile);
 		const profilePolicy = readProfileNotApplicablePolicy(manifest);
-		const gates = requiredGatesForTask(manifest, taskType, riskSurfaces).map((gate) =>
-			verifyGate(gate, {
-				profile,
-				evidence,
-				artifacts,
-				hostEvents,
-				decisions,
-				taskType,
-				profilePolicy,
-				riskSurfaces,
-			}),
-		);
+		const stageFilter = parseOptionalVerificationStage(options.stage);
+		const gates = [
+			...verifySpecBinding({ cwd, profile, run, taskType }),
+			...verifyStagnation({ profile, stagnation }),
+			...requiredGatesForTask(manifest, taskType, riskSurfaces).map((gate) =>
+				verifyGate(gate, {
+					profile,
+					evidence,
+					artifacts,
+					hostEvents,
+					decisions,
+					taskType,
+					profilePolicy,
+					riskSurfaces,
+				}),
+			),
+		];
 		const scoreSummary = summarizeVerificationScore(gates, manifest);
 		const ladder = buildVerificationLadder(manifest, gates, evidence);
 		const ok =
 			scoreSummary.decision === "pass" &&
-			gates.every((gate) => gate.status === "pass" || gate.status === "not_applicable");
+			gates.every(
+				(gate) =>
+					gate.status === "pass" || gate.status === "warn" || gate.status === "not_applicable",
+			);
 		const now = options.now ?? Date.now();
 		const policyViolations = options.write
-			? gates
-					.filter((gate) => gate.status === "block")
-					.map((gate) =>
-						store.recordPolicyViolation({
-							runId: run.runId,
-							policyId: gate.id,
-							severity: "error",
-							message: gate.message,
-							blocked: true,
-							ts: now,
-						}),
-					)
+			? [
+					...gates
+						.filter((gate) => gate.status === "block" || gate.status === "warn")
+						.map((gate) =>
+							store.recordPolicyViolation({
+								runId: run.runId,
+								policyId: gate.policyId ?? gate.id,
+								severity: gate.status === "warn" ? "warning" : "error",
+								message: gate.message,
+								blocked: gate.status === "block",
+								ts: now,
+							}),
+						),
+					...(stagnation
+						? [
+								store.recordPolicyViolation({
+									runId: run.runId,
+									policyId: stagnation.policyId,
+									severity: stagnation.severity,
+									message: stagnation.message,
+									blocked: stagnation.severity === "block",
+									ts: now,
+								}),
+							]
+						: []),
+				]
 			: [];
+		const stages = buildVerificationStages({
+			run,
+			profile,
+			gates,
+			evidence,
+			policyViolations,
+			riskSurfaces,
+			manifest,
+			scores: store.listScores(run.runId),
+			priorPolicyViolations: store.listPolicyViolations(run.runId),
+		}).filter((stage) => (stageFilter ? stage.stage === stageFilter : true));
 		if (options.write) {
 			store.recordDecision({
 				runId: run.runId,
@@ -790,6 +939,7 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 			taskType,
 			ok,
 			gates,
+			stages,
 			ladder,
 			scoreSummary,
 			score,
@@ -798,6 +948,318 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 	} finally {
 		store.close();
 	}
+}
+
+export function readRunSpecBinding(run: RunRecord): RunSpecBinding | null {
+	const metadata = asRecord(run.metadata);
+	const candidate = asRecord(metadata?.specBinding);
+	if (!candidate) {
+		return null;
+	}
+	if (
+		candidate.schemaVersion !== 1 ||
+		typeof candidate.bindingId !== "string" ||
+		!isSpecBindingSourceType(candidate.sourceType) ||
+		typeof candidate.acceptanceSha256 !== "string" ||
+		!isPavedaProfile(candidate.profile) ||
+		typeof candidate.createdAt !== "number"
+	) {
+		return null;
+	}
+	return {
+		schemaVersion: 1,
+		bindingId: candidate.bindingId,
+		sourceType: candidate.sourceType,
+		...(typeof candidate.sourcePath === "string" ? { sourcePath: candidate.sourcePath } : {}),
+		...(typeof candidate.specSha256 === "string" ? { specSha256: candidate.specSha256 } : {}),
+		acceptanceSha256: candidate.acceptanceSha256,
+		...(typeof candidate.ambiguityScore === "number"
+			? { ambiguityScore: candidate.ambiguityScore }
+			: {}),
+		...(typeof candidate.contractVersion === "string"
+			? { contractVersion: candidate.contractVersion }
+			: {}),
+		profile: candidate.profile,
+		createdAt: candidate.createdAt,
+	};
+}
+
+function buildRunSpecBinding(input: {
+	cwd: string;
+	sourcePath?: string;
+	acceptanceCriteria: readonly string[];
+	ambiguityScore?: number;
+	profile: PavedaProfile;
+	createdAt: number;
+}): RunSpecBinding {
+	const sourcePath = input.sourcePath ? resolve(input.cwd, input.sourcePath) : undefined;
+	const sourceType: RunSpecBindingSourceType = sourcePath ? "spec_file" : "inline";
+	const specSha256 = sourcePath ? sha256(readFileSync(sourcePath)) : undefined;
+	const relativeSourcePath = sourcePath ? relative(input.cwd, sourcePath) : undefined;
+	const acceptanceSha256 = sha256(canonicalJson([...input.acceptanceCriteria]));
+	const bindingSeed = {
+		sourceType,
+		sourcePath: relativeSourcePath,
+		specSha256,
+		acceptanceSha256,
+		ambiguityScore: input.ambiguityScore,
+		contractVersion: `profile:${input.profile}`,
+		profile: input.profile,
+	};
+	return {
+		schemaVersion: 1,
+		bindingId: sha256(canonicalJson(bindingSeed)),
+		sourceType,
+		...(relativeSourcePath ? { sourcePath: relativeSourcePath } : {}),
+		...(specSha256 ? { specSha256 } : {}),
+		acceptanceSha256,
+		...(input.ambiguityScore !== undefined ? { ambiguityScore: input.ambiguityScore } : {}),
+		contractVersion: `profile:${input.profile}`,
+		profile: input.profile,
+		createdAt: input.createdAt,
+	};
+}
+
+function verifySpecBinding(input: {
+	cwd: string;
+	profile: PavedaProfile;
+	run: RunRecord;
+	taskType: PavedaTaskType;
+}): VerifyGateResult[] {
+	if (!isCodeChangingTask(input.taskType)) {
+		return [];
+	}
+	const binding = readRunSpecBinding(input.run);
+	if (!binding || isMissingInlineSpecBinding(binding, input.run)) {
+		if (input.profile === "fast") {
+			return [
+				specBindingGate({
+					policyId: "workflow.spec-binding.missing",
+					status: "warn",
+					message: "fast code-changing run has no stable spec binding",
+					recovery:
+						"Run paveda do with --from-spec or --acceptance so the run has a stable contract binding.",
+				}),
+			];
+		}
+		return input.profile === "strict" || input.profile === "release"
+			? [
+					specBindingGate({
+						policyId: "workflow.spec-binding.missing",
+						status: "block",
+						message: "strict and release code-changing runs require a spec binding",
+						recovery:
+							"Run paveda do with --from-spec or --acceptance so the run has a stable contract binding.",
+					}),
+				]
+			: [];
+	}
+	if (binding.sourceType === "spec_file" && binding.sourcePath && binding.specSha256) {
+		const currentSha256 = sha256(readFileSync(resolve(input.cwd, binding.sourcePath)));
+		if (currentSha256 !== binding.specSha256) {
+			return [
+				specBindingGate({
+					policyId: "workflow.spec-binding.drift",
+					status: "block",
+					message: "source spec hash differs from the recorded run binding",
+					recovery: "Create an approved revision event or start a new run from the updated spec.",
+				}),
+			];
+		}
+	}
+	const ambiguityThreshold = ambiguityThresholdForProfile(input.profile);
+	if (
+		ambiguityThreshold !== null &&
+		binding.ambiguityScore !== undefined &&
+		binding.ambiguityScore > ambiguityThreshold
+	) {
+		return [
+			specBindingGate({
+				policyId: "workflow.spec-binding.ambiguous",
+				status: "block",
+				message: `ambiguity score ${binding.ambiguityScore} exceeds ${input.profile} threshold ${ambiguityThreshold}`,
+				recovery:
+					"Clarify the spec with /specify and start a new run with the lower ambiguity score.",
+			}),
+		];
+	}
+	return [
+		specBindingGate({
+			policyId: "workflow.spec-binding.recorded",
+			status: "pass",
+			message: `run bound to ${binding.sourceType} ${binding.bindingId}`,
+			recovery: null,
+		}),
+	];
+}
+
+function isMissingInlineSpecBinding(binding: RunSpecBinding, run: RunRecord): boolean {
+	return binding.sourceType === "inline" && readStringArray(run.acceptanceCriteria).length === 0;
+}
+
+function verifyStagnation(input: {
+	profile: PavedaProfile;
+	stagnation: StagnationState | null;
+}): VerifyGateResult[] {
+	if (!input.stagnation || input.stagnation.severity !== "block") {
+		return [];
+	}
+	return [
+		{
+			id: "stagnation-gate",
+			policyId: input.stagnation.policyId,
+			phase: input.stagnation.phaseId,
+			evidenceKind: "iteration_fingerprint",
+			status: "block",
+			message: input.stagnation.message,
+			evidenceIds: [],
+			recovery: {
+				action: "repair_then_block",
+				message: input.stagnation.recovery,
+			},
+		},
+	];
+}
+
+function detectStagnation(
+	run: RunRecord,
+	fingerprints: readonly IterationFingerprintRecord[],
+): StagnationState | null {
+	if (fingerprints.length < 3) {
+		return null;
+	}
+	const byPhase = new Map<string, IterationFingerprintRecord[]>();
+	for (const fingerprint of fingerprints) {
+		const items = byPhase.get(fingerprint.phaseId) ?? [];
+		items.push(fingerprint);
+		byPhase.set(fingerprint.phaseId, items);
+	}
+	const phaseEntries = [...byPhase.entries()]
+		.map(([phaseId, items]) => ({
+			phaseId,
+			items: [...items].sort((left, right) => left.iteration - right.iteration),
+		}))
+		.sort((left, right) => latestIteration(right.items) - latestIteration(left.items));
+	for (const entry of phaseEntries) {
+		const pattern = detectPhaseStagnation(entry.items);
+		if (pattern) {
+			const severity = run.profile === "strict" || run.profile === "release" ? "block" : "warning";
+			const recovery = recoveryForStagnationPattern(pattern.pattern);
+			return {
+				pattern: pattern.pattern,
+				runId: run.runId,
+				phaseId: entry.phaseId,
+				iterations: pattern.iterations,
+				severity,
+				policyId: "workflow.stagnation.recovery-required",
+				message: `${pattern.pattern} detected across iterations ${pattern.iterations.join(", ")}`,
+				recovery,
+				nextCommand: `paveda evidence add --run ${run.runId} --phase ${entry.phaseId} --id stagnation-recovery --kind recovery_plan --result pass --rationale "${recovery}"`,
+			};
+		}
+	}
+	return null;
+}
+
+function detectPhaseStagnation(
+	items: readonly IterationFingerprintRecord[],
+): { pattern: StagnationPattern; iterations: number[] } | null {
+	if (items.length < 3) {
+		return null;
+	}
+	const last3 = items.slice(-3);
+	const repeatedSignal = repeatedFingerprintSignal(last3);
+	if (repeatedSignal) {
+		return { pattern: "spinning", iterations: last3.map((item) => item.iteration) };
+	}
+	if (
+		last3.every((item) => typeof item.verificationScore === "number") &&
+		last3.every((item) => item.failureFingerprint === last3[0]?.failureFingerprint) &&
+		Math.max(...last3.map((item) => item.verificationScore ?? 0)) -
+			Math.min(...last3.map((item) => item.verificationScore ?? 0)) <=
+			0.01
+	) {
+		return { pattern: "no_drift", iterations: last3.map((item) => item.iteration) };
+	}
+	if (items.length >= 4) {
+		const last4 = items.slice(-4);
+		const signals = last4.map(primaryFingerprintSignal);
+		if (signals[0] && signals[1] && signals[0] === signals[2] && signals[1] === signals[3]) {
+			return { pattern: "oscillation", iterations: last4.map((item) => item.iteration) };
+		}
+		const scores = last4.map((item) => item.verificationScore);
+		if (scores.every((score): score is number => typeof score === "number")) {
+			const [first, second, third, fourth] = scores as [number, number, number, number];
+			const improvements = [second - first, third - second, fourth - third];
+			if (
+				improvements.every((value) => value >= 0) &&
+				(improvements[0] ?? 0) > 0.01 &&
+				improvements.slice(1).every((value) => value < 0.01)
+			) {
+				return {
+					pattern: "diminishing_returns",
+					iterations: last4.map((item) => item.iteration),
+				};
+			}
+		}
+	}
+	return null;
+}
+
+function readIterationFingerprintMetadata(value: unknown): {
+	phaseId?: string;
+	iteration: number;
+	outputHash?: string | null;
+	diffHash?: string | null;
+	failureFingerprint?: string | null;
+	verificationScore?: number | null;
+	taxonomy?: string[];
+} | null {
+	const metadata = asRecord(value);
+	const fingerprint = asRecord(metadata?.iterationFingerprint);
+	if (!fingerprint || typeof fingerprint.iteration !== "number") {
+		return null;
+	}
+	return {
+		...(typeof fingerprint.phaseId === "string" ? { phaseId: fingerprint.phaseId } : {}),
+		iteration: fingerprint.iteration,
+		...(typeof fingerprint.outputHash === "string" ? { outputHash: fingerprint.outputHash } : {}),
+		...(typeof fingerprint.diffHash === "string" ? { diffHash: fingerprint.diffHash } : {}),
+		...(typeof fingerprint.failureFingerprint === "string"
+			? { failureFingerprint: fingerprint.failureFingerprint }
+			: {}),
+		...(typeof fingerprint.verificationScore === "number"
+			? { verificationScore: fingerprint.verificationScore }
+			: {}),
+		taxonomy: readStringArray(fingerprint.taxonomy),
+	};
+}
+
+function repeatedFingerprintSignal(items: readonly IterationFingerprintRecord[]): string | null {
+	const signals = items.map((item) => item.diffHash ?? item.outputHash ?? null);
+	const first = signals[0];
+	return first && signals.every((signal) => signal === first) ? first : null;
+}
+
+function primaryFingerprintSignal(item: IterationFingerprintRecord): string | null {
+	return item.diffHash ?? item.outputHash ?? item.failureFingerprint ?? null;
+}
+
+function latestIteration(items: readonly IterationFingerprintRecord[]): number {
+	return Math.max(...items.map((item) => item.iteration));
+}
+
+function recoveryForStagnationPattern(pattern: StagnationPattern): string {
+	if (pattern === "spinning") {
+		return "check test target, spec interpretation, and implementation hash before another iteration";
+	}
+	if (pattern === "oscillation") {
+		return "require boundary or architecture review before continuing";
+	}
+	if (pattern === "no_drift") {
+		return "require research or new evidence before another implementation loop";
+	}
+	return "reduce scope or split the task before continuing";
 }
 
 function requireRunnableContract(input: {
@@ -1237,10 +1699,13 @@ function summarizeVerificationScore(
 	gates: readonly VerifyGateResult[],
 	manifest: ProfileManifest,
 ): VerificationScoreSummary {
-	const requiredGates = gates.length;
-	const passedGates = gates.filter((gate) => gate.status === "pass").length;
-	const notApplicableGates = gates.filter((gate) => gate.status === "not_applicable").length;
-	const blockedGates = gates.filter((gate) => gate.status === "block").length;
+	const requiredScoredGates = gates.filter((gate) => gate.status !== "warn");
+	const requiredGates = requiredScoredGates.length;
+	const passedGates = requiredScoredGates.filter((gate) => gate.status === "pass").length;
+	const notApplicableGates = requiredScoredGates.filter(
+		(gate) => gate.status === "not_applicable",
+	).length;
+	const blockedGates = requiredScoredGates.filter((gate) => gate.status === "block").length;
 	const value = requiredGates === 0 ? 1 : (passedGates + notApplicableGates) / requiredGates;
 	const threshold = readVerificationScoreThreshold(manifest);
 	const decision = blockedGates === 0 && value >= threshold ? "pass" : "block";
@@ -1291,6 +1756,15 @@ function buildVerificationLadder(
 				message: "One or more required gates are blocked.",
 			};
 		}
+		if (stepGates.some((gate) => gate.status === "warn")) {
+			return {
+				evidenceKind,
+				status: "warn",
+				requiredGateIds: stepGates.map((gate) => gate.id),
+				evidenceIds: stepGates.flatMap((gate) => gate.evidenceIds),
+				message: "One or more non-blocking gates emitted warnings.",
+			};
+		}
 		if (stepGates.every((gate) => gate.status === "not_applicable")) {
 			return {
 				evidenceKind,
@@ -1308,6 +1782,282 @@ function buildVerificationLadder(
 			message: "Required gates passed.",
 		};
 	});
+}
+
+function buildVerificationStages(input: {
+	run: RunRecord;
+	profile: PavedaProfile;
+	gates: readonly VerifyGateResult[];
+	evidence: readonly EvidenceRecord[];
+	policyViolations: readonly PolicyViolationRecord[];
+	priorPolicyViolations: readonly PolicyViolationRecord[];
+	scores: readonly ScoreRecord[];
+	riskSurfaces: readonly RiskSurface[];
+	manifest: ProfileManifest;
+}): VerificationStageResult[] {
+	const stageFacts = (["mechanical", "semantic", "consensus"] as const).map((stage) =>
+		buildVerificationStageFacts(stage, input.gates, input.evidence),
+	);
+	const consensusRequired = consensusRequiredForRun({
+		profile: input.profile,
+		riskSurfaces: input.riskSurfaces,
+		gates: input.gates,
+		evidence: input.evidence,
+		scores: input.scores,
+		priorPolicyViolations: input.priorPolicyViolations,
+		manifest: input.manifest,
+		stageFacts,
+	});
+	return (["mechanical", "semantic", "consensus"] as const).map((stage) => {
+		const facts = stageFacts.find((item) => item.stage === stage);
+		if (!facts) {
+			throw new Error(`Missing verification stage facts: ${stage}`);
+		}
+		const required =
+			stage === "consensus" ? consensusRequired.required : facts.stageGates.length > 0;
+		const result: EvidenceResult =
+			facts.blockingGates.length > 0
+				? "block"
+				: required || facts.stageGates.length > 0
+					? "pass"
+					: "not_applicable";
+		const blockingPolicyViolationIds = input.policyViolations
+			.filter((violation) =>
+				facts.blockingGates.some((gate) => (gate.policyId ?? gate.id) === violation.policyId),
+			)
+			.map((violation) => violation.id);
+		return {
+			stage,
+			result,
+			score: facts.score,
+			confidence: facts.confidence,
+			required,
+			triggeredBy: stage === "consensus" ? consensusRequired.triggeredBy : stageTriggeredBy(stage),
+			evidenceIds: uniqueNumbers([
+				...facts.stageEvidence.map((item) => item.id),
+				...facts.stageGates.flatMap((gate) => gate.evidenceIds),
+			]),
+			blockingPolicyViolationIds,
+			...(result === "block"
+				? { nextCommand: stageNextCommand(input.run.runId, stage, facts.blockingGates) }
+				: {}),
+		};
+	});
+}
+
+interface VerificationStageFacts {
+	stage: VerificationStage;
+	stageGates: VerifyGateResult[];
+	stageEvidence: EvidenceRecord[];
+	blockingGates: VerifyGateResult[];
+	score: number;
+	confidence: number;
+}
+
+function buildVerificationStageFacts(
+	stage: VerificationStage,
+	gates: readonly VerifyGateResult[],
+	evidence: readonly EvidenceRecord[],
+): VerificationStageFacts {
+	const stageGates = gates.filter((gate) => gateStage(gate.evidenceKind) === stage);
+	const stageEvidence = evidence.filter((item) => gateStage(item.kind) === stage);
+	const blockingGates = stageGates.filter((gate) => gate.status === "block");
+	const passedGates = stageGates.filter((gate) => gate.status === "pass").length;
+	const notApplicableGates = stageGates.filter((gate) => gate.status === "not_applicable").length;
+	const failedEvidence = stageEvidence.filter(
+		(item) => item.result === "fail" || item.result === "block" || item.result === "inconclusive",
+	);
+	const score =
+		stageGates.length === 0
+			? failedEvidence.length > 0
+				? 0
+				: 1
+			: (passedGates + notApplicableGates) / stageGates.length;
+	return {
+		stage,
+		stageGates,
+		stageEvidence,
+		blockingGates,
+		score,
+		confidence: semanticConfidence(stage, stageEvidence, score),
+	};
+}
+
+function gateStage(evidenceKind: string): VerificationStage {
+	if (
+		evidenceKind === "semantic_review" ||
+		evidenceKind === "acceptance_review" ||
+		evidenceKind === "goal_alignment" ||
+		evidenceKind === "drift_review"
+	) {
+		return "semantic";
+	}
+	if (
+		evidenceKind === "risk_review" ||
+		evidenceKind === "security_scan" ||
+		evidenceKind === "adversarial_review" ||
+		evidenceKind === "release_signoff" ||
+		evidenceKind === "manual_decision" ||
+		evidenceKind === "conformance" ||
+		evidenceKind === "host_event" ||
+		evidenceKind === "trace"
+	) {
+		return "consensus";
+	}
+	return "mechanical";
+}
+
+function consensusRequiredForRun(input: {
+	profile: PavedaProfile;
+	riskSurfaces: readonly RiskSurface[];
+	gates: readonly VerifyGateResult[];
+	evidence: readonly EvidenceRecord[];
+	scores: readonly ScoreRecord[];
+	priorPolicyViolations: readonly PolicyViolationRecord[];
+	manifest: ProfileManifest;
+	stageFacts: readonly VerificationStageFacts[];
+}): { required: boolean; triggeredBy: string[] } {
+	const triggeredBy: string[] = [];
+	if (input.profile === "release") {
+		triggeredBy.push("profile:release");
+	}
+	for (const surface of input.riskSurfaces) {
+		if (
+			surface === "auth" ||
+			surface === "payment" ||
+			surface === "data" ||
+			surface === "infra" ||
+			surface === "public-api"
+		) {
+			triggeredBy.push(`risk:${surface}`);
+		}
+	}
+	if (input.riskSurfaces.includes("public-api")) {
+		triggeredBy.push("public-api:changed");
+	}
+	if (
+		input.gates.some(
+			(gate) =>
+				(gate.policyId ?? gate.id) === "workflow.spec-binding.drift" && gate.status === "block",
+		)
+	) {
+		triggeredBy.push("spec-binding:drift");
+	}
+	const semanticFacts = input.stageFacts.find((facts) => facts.stage === "semantic");
+	const hasSemanticEvidence = (semanticFacts?.stageEvidence.length ?? 0) > 0;
+	if (semanticFacts && hasSemanticEvidence) {
+		const semanticThreshold = readStageThreshold(input.manifest, "semantic");
+		if (semanticFacts.score < semanticThreshold) {
+			triggeredBy.push("semantic:score-below-threshold");
+		}
+		if (semanticFacts.confidence < readSemanticConfidenceThreshold(input.manifest)) {
+			triggeredBy.push("semantic:low-confidence");
+		}
+	}
+	if (
+		hasRepeatedDistinctVerificationFailures(
+			input.scores,
+			input.priorPolicyViolations,
+			input.evidence,
+		)
+	) {
+		triggeredBy.push("verification:repeated-distinct-failures");
+	}
+	return {
+		required: triggeredBy.length > 0,
+		triggeredBy: uniqueStrings(triggeredBy),
+	};
+}
+
+function semanticConfidence(
+	stage: VerificationStage,
+	evidence: readonly EvidenceRecord[],
+	score: number,
+): number {
+	if (stage !== "semantic") {
+		return score;
+	}
+	const confidenceValues = evidence
+		.map((item) => readNumberFromMetadata(item.metadata, "confidence"))
+		.filter((value): value is number => typeof value === "number");
+	if (confidenceValues.length === 0) {
+		return score;
+	}
+	return Math.min(...confidenceValues);
+}
+
+function readStageThreshold(manifest: ProfileManifest, stage: VerificationStage): number {
+	const stages = Array.isArray(manifest.verificationStages) ? manifest.verificationStages : [];
+	const match = stages.map(asRecord).find((candidate) => {
+		return candidate?.stage === stage && typeof candidate.threshold === "number";
+	});
+	return typeof match?.threshold === "number"
+		? match.threshold
+		: readVerificationScoreThreshold(manifest);
+}
+
+function readSemanticConfidenceThreshold(manifest: ProfileManifest): number {
+	return Math.min(readStageThreshold(manifest, "semantic"), 0.7);
+}
+
+function hasRepeatedDistinctVerificationFailures(
+	scores: readonly ScoreRecord[],
+	policyViolations: readonly PolicyViolationRecord[],
+	evidence: readonly EvidenceRecord[],
+): boolean {
+	const failedVerifications = scores.filter(
+		(score) => score.metric === "verification_score" && score.decision === "block",
+	);
+	if (failedVerifications.length < 2) {
+		return false;
+	}
+	const failureClasses = new Set<string>();
+	for (const violation of policyViolations.filter((violation) => violation.blocked)) {
+		failureClasses.add(violation.policyId);
+	}
+	for (const item of evidence.filter(
+		(item) => item.result === "fail" || item.result === "block" || item.result === "inconclusive",
+	)) {
+		failureClasses.add(item.kind);
+	}
+	return failureClasses.size >= 2;
+}
+
+function stageTriggeredBy(stage: VerificationStage): string[] {
+	return stage === "mechanical" ? ["verification:deterministic"] : ["verification:semantic"];
+}
+
+function stageNextCommand(
+	runId: string,
+	stage: VerificationStage,
+	blockingGates: readonly VerifyGateResult[],
+): string {
+	const firstGate = blockingGates[0];
+	if (!firstGate) {
+		return `paveda verify --run ${runId} --stage ${stage}`;
+	}
+	return [
+		"paveda evidence add",
+		`--run ${runId}`,
+		`--phase ${firstGate.phase}`,
+		`--kind ${firstGate.evidenceKind}`,
+		"--result pass",
+		'--rationale "record passing evidence"',
+	].join(" ");
+}
+
+function uniqueNumbers(values: readonly number[]): number[] {
+	return [...new Set(values)];
+}
+
+function uniqueStrings(values: readonly string[]): string[] {
+	return [...new Set(values)];
+}
+
+function readNumberFromMetadata(metadata: unknown, key: string): number | null {
+	const record = asRecord(metadata);
+	const value = record?.[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function isRequiredGate(value: unknown): value is RequiredGate {
@@ -1474,6 +2224,84 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
 
+function specBindingGate(input: {
+	policyId: string;
+	status: "pass" | "warn" | "block";
+	message: string;
+	recovery: string | null;
+}): VerifyGateResult {
+	return {
+		id: "spec-binding-gate",
+		policyId: input.policyId,
+		phase: "intake",
+		evidenceKind: "spec_binding",
+		status: input.status,
+		message: input.message,
+		evidenceIds: [],
+		recovery: input.recovery
+			? {
+					action: "repair_then_block",
+					message: input.recovery,
+				}
+			: null,
+	};
+}
+
+function isCodeChangingTask(taskType: PavedaTaskType): boolean {
+	return (
+		taskType === "code" ||
+		taskType === "ui" ||
+		taskType === "api" ||
+		taskType === "data" ||
+		taskType === "infra" ||
+		taskType === "test" ||
+		taskType === "mixed"
+	);
+}
+
+function ambiguityThresholdForProfile(profile: PavedaProfile): number | null {
+	if (profile === "release") {
+		return 0.25;
+	}
+	if (profile === "strict") {
+		return 0.35;
+	}
+	if (profile === "standard") {
+		return 0.5;
+	}
+	return null;
+}
+
+function sha256(value: string | Buffer): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+function canonicalJson(value: unknown): string {
+	return JSON.stringify(value, (_key, item) => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) {
+			return item;
+		}
+		return Object.fromEntries(
+			Object.entries(item as Record<string, unknown>)
+				.filter(([, entry]) => entry !== undefined)
+				.sort(([left], [right]) => left.localeCompare(right)),
+		);
+	});
+}
+
+function isSpecBindingSourceType(value: unknown): value is RunSpecBindingSourceType {
+	return (
+		value === "inline" ||
+		value === "spec_file" ||
+		value === "contract_source" ||
+		value === "host_goal"
+	);
+}
+
+function isPavedaProfile(value: unknown): value is PavedaProfile {
+	return value === "fast" || value === "standard" || value === "strict" || value === "release";
+}
+
 function isHostCapabilityEntry(value: unknown): value is HostCapabilityEntry {
 	const candidate = value as Partial<HostCapabilityEntry>;
 	return (
@@ -1495,6 +2323,16 @@ function parseEvidenceResult(value: string): EvidenceResult {
 		return value;
 	}
 	throw new Error(`Invalid evidence result: ${value}`);
+}
+
+function parseOptionalVerificationStage(value: string | undefined): VerificationStage | undefined {
+	if (value === undefined) {
+		return undefined;
+	}
+	if (value === "mechanical" || value === "semantic" || value === "consensus") {
+		return value;
+	}
+	throw new Error(`Invalid verification stage: ${value}`);
 }
 
 function readTaskType(run: RunRecord): string {

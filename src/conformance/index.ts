@@ -256,6 +256,7 @@ function assertReleaseMissingGatesBlocks(input: FixtureInput): ConformanceFixtur
 		profile: "release",
 		objective: "Conformance release task without release gates",
 		taskType: "code",
+		acceptanceCriteria: ["release gates must block when evidence is missing"],
 		now: input.now,
 	});
 	const verified = verifyRun({
@@ -289,6 +290,7 @@ function assertReleaseFullEvidencePasses(input: FixtureInput): ConformanceFixtur
 		profile: "release",
 		objective: "Conformance release task with complete evidence",
 		taskType: "code",
+		acceptanceCriteria: ["complete release evidence satisfies every required gate"],
 		now: input.now,
 	});
 	const artifact = writeReleaseConformanceArtifact(cwd, started.run.runId, input.now + 1);

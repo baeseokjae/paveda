@@ -1,80 +1,108 @@
-[
-	{
-		"eval_id": 1,
-		"eval_name": "do-contract-shell-start",
-		"prompt": "add health check endpoint to /api/health",
-		"assertions": [
-			{
-				"text": "Paveda run creation command is required",
-				"type": "contains_section",
-				"pattern": "paveda do --host"
-			},
-			{
-				"text": "Host-native execution must be preserved",
-				"type": "contains_section",
-				"pattern": "Host-Native Execution"
-			},
-			{
-				"text": "Projection drift must block before edits",
-				"type": "contains_section",
-				"pattern": "projection status"
-			}
-		]
-	},
-	{
-		"eval_id": 2,
-		"eval_name": "do-code-test-gates",
-		"prompt": "--task-type code refactor authentication middleware",
-		"assertions": [
-			{
-				"text": "Unit gate is mandatory for code-changing tasks",
-				"type": "contains_section",
-				"pattern": "Unit evidence is mandatory"
-			},
-			{
-				"text": "E2E or package-level gate is mandatory for strict code changes",
-				"type": "contains_section",
-				"pattern": "E2E or package-level E2E evidence is mandatory"
-			},
-			{
-				"text": "not_applicable must block for code-changing unit/e2e gates",
-				"type": "contains_section",
-				"pattern": "not_applicable.*block"
-			}
-		]
-	},
-	{
-		"eval_id": 3,
-		"eval_name": "do-docs-not-applicable",
-		"prompt": "--task-type docs update README",
-		"assertions": [
-			{
-				"text": "Docs-only tasks must use audited not_applicable evidence for test gates",
-				"type": "contains_section",
-				"pattern": "metadata.classifierReason"
-			},
-			{
-				"text": "User approval metadata is required for test non-applicability",
-				"type": "contains_section",
-				"pattern": "metadata.userApproval"
-			}
-		]
-	},
-	{
-		"eval_id": 4,
-		"eval_name": "do-release-profile-gates",
-		"prompt": "--profile release prepare release",
-		"assertions": [
-			{
-				"text": "Release profile must require release gates",
-				"type": "contains_section",
-				"pattern": "release gate"
-			},
-			{
-				"text": "Release must not silently downgrade to strict",
-				"type": "contains_section",
-				"pattern": "do not downgrade"
-			}
-		]
-	}
-]
+{
+  "schemaVersion": 1,
+  "skill": "do",
+  "cases": [
+    {
+      "id": "do-contract-shell-start",
+      "prompt": "add health check endpoint to /api/health",
+      "baselineExpectedFailure": "agent starts implementation without a Paveda run id",
+      "expectedWithSkill": [
+        "paveda do --host",
+        "Host-Native Execution",
+        "projection status"
+      ],
+      "forbidden": [
+        "claims completion without evidence"
+      ],
+      "assertions": [
+        {
+          "text": "Paveda run creation command is required",
+          "type": "contains_section",
+          "pattern": "paveda do --host"
+        },
+        {
+          "text": "Host-native execution must be preserved",
+          "type": "contains_section",
+          "pattern": "Host-Native Execution"
+        },
+        {
+          "text": "Projection drift must block before edits",
+          "type": "contains_section",
+          "pattern": "projection status"
+        }
+      ]
+    },
+    {
+      "id": "do-code-test-gates",
+      "prompt": "--task-type code refactor authentication middleware",
+      "baselineExpectedFailure": "agent marks code work complete with skipped unit or e2e evidence",
+      "expectedWithSkill": [
+        "Unit evidence is mandatory",
+        "E2E or package-level E2E evidence is mandatory",
+        "not_applicable.*block"
+      ],
+      "forbidden": [
+        "skip tests for code-changing tasks"
+      ],
+      "assertions": [
+        {
+          "text": "Unit gate is mandatory for code-changing tasks",
+          "type": "contains_section",
+          "pattern": "Unit evidence is mandatory"
+        },
+        {
+          "text": "E2E or package-level gate is mandatory for strict code changes",
+          "type": "contains_section",
+          "pattern": "E2E or package-level E2E evidence is mandatory"
+        },
+        {
+          "text": "not_applicable must block for code-changing unit/e2e gates",
+          "type": "contains_section",
+          "pattern": "not_applicable.*block"
+        }
+      ]
+    },
+    {
+      "id": "do-docs-not-applicable",
+      "prompt": "--task-type docs update README",
+      "baselineExpectedFailure": "agent omits audited not_applicable rationale for docs-only gates",
+      "expectedWithSkill": [
+        "metadata.classifierReason",
+        "metadata.userApproval"
+      ],
+      "assertions": [
+        {
+          "text": "Docs-only tasks must use audited not_applicable evidence for test gates",
+          "type": "contains_section",
+          "pattern": "metadata.classifierReason"
+        },
+        {
+          "text": "User approval metadata is required for test non-applicability",
+          "type": "contains_section",
+          "pattern": "metadata.userApproval"
+        }
+      ]
+    },
+    {
+      "id": "do-release-profile-gates",
+      "prompt": "--profile release prepare release",
+      "baselineExpectedFailure": "agent downgrades release profile or omits release gates",
+      "expectedWithSkill": [
+        "release gate",
+        "do not downgrade"
+      ],
+      "assertions": [
+        {
+          "text": "Release profile must require release gates",
+          "type": "contains_section",
+          "pattern": "release gate"
+        },
+        {
+          "text": "Release must not silently downgrade to strict",
+          "type": "contains_section",
+          "pattern": "do not downgrade"
+        }
+      ]
+    }
+  ]
+}

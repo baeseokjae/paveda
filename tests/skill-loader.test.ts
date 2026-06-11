@@ -18,6 +18,7 @@ import {
 	loadSkillStatus,
 	loadSkills,
 	parseSkillDocument,
+	testSkillProcessContract,
 	upsertSkillRouterFrontmatter,
 } from "../src/skill-loader/index.js";
 
@@ -193,6 +194,132 @@ ambiguity-required: 0.2
 				ambiguityRequired: 0.15,
 			},
 		});
+	});
+
+	it("tests packaged skill eval contracts deterministically", () => {
+		const result = testSkillProcessContract({
+			name: "do",
+			projectRoots: [],
+			userRoots: [],
+		});
+
+		expect(result).toMatchObject({
+			name: "do",
+			ok: true,
+			issues: [],
+		});
+		expect(result.cases.map((item) => item.evalName)).toContain("do-code-test-gates");
+		expect(result.cases.flatMap((item) => item.assertions).every((item) => item.ok)).toBe(true);
+		expect(result.cases[0]).toMatchObject({
+			evalId: "do-contract-shell-start",
+			baselineExpectedFailure: expect.stringContaining("Paveda run id"),
+		});
+	});
+
+	it("tests host-rendered packaged skill eval contracts", () => {
+		for (const host of ["codex", "claude-code", "pi", "hermes"] as const) {
+			const result = testSkillProcessContract({
+				name: "do",
+				host,
+				projectRoots: [],
+				userRoots: [],
+			});
+
+			expect(result).toMatchObject({
+				name: "do",
+				ok: true,
+				issues: [],
+			});
+		}
+	});
+
+	it("fails skill eval contracts when required sections are missing", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-skill-eval-fail-"));
+		tempDirs.push(dir);
+		const root = join(dir, "skills");
+		writeSkill(root, "do", "do", "minimal skill");
+		mkdirSync(join(root, "do", "evals"), { recursive: true });
+		writeFileSync(
+			join(root, "do", "evals", "evals.json"),
+			`${JSON.stringify(
+				{
+					schemaVersion: 1,
+					skill: "do",
+					cases: [
+						{
+							id: "missing-required-section",
+							prompt: "run",
+							expectedWithSkill: ["requiredGates"],
+						},
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+
+		const result = testSkillProcessContract({
+			name: "do",
+			projectRoots: [root],
+			userRoots: [],
+			builtinRoots: [],
+		});
+
+		expect(result.ok).toBe(false);
+		expect(result.cases[0]?.assertions[0]).toMatchObject({
+			ok: false,
+			message: "pattern missing from skill body",
+		});
+	});
+
+	it("rejects malformed skill eval schemas", () => {
+		const dir = mkdtempSync(join(tmpdir(), "paveda-skill-eval-schema-"));
+		tempDirs.push(dir);
+		const root = join(dir, "skills");
+		writeSkill(root, "do", "do", "minimal skill");
+		mkdirSync(join(root, "do", "evals"), { recursive: true });
+		writeFileSync(
+			join(root, "do", "evals", "evals.json"),
+			`${JSON.stringify(
+				{
+					schemaVersion: 1,
+					skill: "do",
+					extra: true,
+					cases: [
+						{
+							id: "bad-case",
+							prompt: "run",
+							unknown: true,
+							assertions: [
+								{
+									type: "contains_section",
+									pattern: "requiredGates",
+									unknown: true,
+								},
+							],
+						},
+					],
+				},
+				null,
+				2,
+			)}\n`,
+		);
+
+		const result = testSkillProcessContract({
+			name: "do",
+			projectRoots: [root],
+			userRoots: [],
+			builtinRoots: [],
+		});
+
+		expect(result.ok).toBe(false);
+		expect(result.issues).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ code: "evals.unknown_field" }),
+				expect.objectContaining({ code: "eval.unknown_field" }),
+				expect.objectContaining({ code: "eval.unknown_assertion_field" }),
+			]),
+		);
 	});
 
 	it("limits builtin skill discovery to harness manifest skill entries", () => {

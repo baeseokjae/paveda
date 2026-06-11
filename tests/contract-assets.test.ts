@@ -108,6 +108,13 @@ type ProfileManifest = {
 	scoreThresholds: ScoreThreshold[];
 	requiredGates: RequiredGate[];
 	verificationLadder: string[];
+	verificationStages: Array<{
+		stage: "mechanical" | "semantic" | "consensus";
+		required: boolean;
+		threshold: number;
+		triggeredBy: string[];
+		allowNotApplicable?: boolean;
+	}>;
 	notApplicablePolicy: {
 		allowedTaskTypes: string[];
 		ambiguousBehavior: string;
@@ -416,6 +423,11 @@ describe("contract assets", () => {
 		expect(gateById(strict, "e2e-gate").requiredForTaskTypes).toEqual(
 			expect.arrayContaining(["docs", "metadata"]),
 		);
+		expect(strict.verificationStages.map((stage) => stage.stage)).toEqual([
+			"mechanical",
+			"semantic",
+			"consensus",
+		]);
 
 		const release = profileById("release");
 		const releaseGateIds = release.requiredGates.map((gate) => gate.id).sort();
@@ -439,6 +451,11 @@ describe("contract assets", () => {
 		expect(gateById(release, "immutable-artifact-retention").evidenceKind).toBe("trace");
 		expect(release.requiredGates.every((gate) => gate.releaseOverrideAllowed === false)).toBe(true);
 		expect(release.requiredGates.every((gate) => gate.failureBehavior === "block")).toBe(true);
+		expect(release.verificationStages.find((stage) => stage.stage === "consensus")).toMatchObject({
+			required: true,
+			threshold: 1,
+			triggeredBy: expect.arrayContaining(["profile:release"]),
+		});
 	});
 
 	it("declares release as supported with all release gates implemented", () => {

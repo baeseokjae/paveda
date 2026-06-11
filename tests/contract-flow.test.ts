@@ -341,6 +341,7 @@ describe("contract-first CLI flow", () => {
 			profile: "release",
 			objective: "Release executable behavior",
 			taskType: "code",
+			acceptanceCriteria: ["release evidence satisfies every required gate"],
 			now: 12_000,
 		});
 		const missing = verifyRun({
@@ -357,6 +358,12 @@ describe("contract-first CLI flow", () => {
 				expect.objectContaining({ id: "immutable-artifact-retention", status: "block" }),
 			]),
 		);
+		const missingConsensus = missing.stages.find((stage) => stage.stage === "consensus");
+		expect(missingConsensus).toMatchObject({
+			result: "block",
+			required: true,
+			nextCommand: expect.stringContaining("--phase semantic-adversarial-verification"),
+		});
 
 		const artifact = writeReleaseArtifact(dir, started.run.runId, 12_200);
 		recordCompleteReleaseEvidence(dir, started.run.runId, artifact.id, 12_300);
@@ -368,11 +375,25 @@ describe("contract-first CLI flow", () => {
 			now: 12_500,
 		});
 		expect(passed.ok).toBe(true);
+		expect(passed.gates).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "spec-binding-gate", status: "pass" }),
+			]),
+		);
 		expect(passed.scoreSummary).toMatchObject({
-			requiredGates: 9,
+			requiredGates: 10,
 			blockedGates: 0,
 			decision: "pass",
 		});
+		const passedConsensus = passed.stages.find((stage) => stage.stage === "consensus");
+		const passedMechanical = passed.stages.find((stage) => stage.stage === "mechanical");
+		expect(passedConsensus).toMatchObject({
+			stage: "consensus",
+			result: "pass",
+			required: true,
+		});
+		expect(passedConsensus?.evidenceIds).toHaveLength(6);
+		expect(passedMechanical?.evidenceIds).toHaveLength(3);
 	});
 });
 

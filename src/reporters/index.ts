@@ -4,7 +4,13 @@ import type { ConformanceResult } from "../conformance/index.js";
 import type { VerifyRunResult } from "../execution/index.js";
 import { assertWritePathIsSafe, writeTextFileSafely } from "../fs-safety.js";
 
-export type ReportNodeStatus = "pass" | "fail" | "block" | "not_applicable" | "not_required";
+export type ReportNodeStatus =
+	| "pass"
+	| "warn"
+	| "fail"
+	| "block"
+	| "not_applicable"
+	| "not_required";
 
 export interface ReportNode {
 	suite: string;
@@ -56,11 +62,20 @@ export function verificationReport(result: VerifyRunResult, now = Date.now()): N
 		details: step,
 		artifactRefs: step.evidenceIds.map((id) => `evidence:${id}`),
 	}));
+	const stageNodes: ReportNode[] = result.stages.map((stage) => ({
+		suite,
+		case: `stage:${stage.stage}`,
+		status: stage.result === "fail" || stage.result === "inconclusive" ? "fail" : stage.result,
+		durationMs: 0,
+		message: stage.nextCommand ?? `${stage.stage} verification ${stage.result}`,
+		details: stage,
+		artifactRefs: stage.evidenceIds.map((id) => `evidence:${id}`),
+	}));
 	return {
 		schemaVersion: 1,
 		generatedAt: new Date(now).toISOString(),
 		ok: result.ok,
-		nodes: [...gateNodes, ...ladderNodes],
+		nodes: [...stageNodes, ...gateNodes, ...ladderNodes],
 	};
 }
 

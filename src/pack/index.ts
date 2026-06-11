@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { assertWritePathIsSafe, writeTextFileSafely } from "../fs-safety.js";
+import { resolveHostCapability } from "../policy/host-capability.js";
 
 export interface BuildPackOptions {
 	cwd?: string;
@@ -15,11 +17,13 @@ export interface InspectPackOptions {
 
 export interface VerifyPackOptions {
 	path: string;
+	host?: string;
 }
 
 export interface InstallPackOptions {
 	path: string;
 	cwd?: string;
+	host?: string;
 	write?: boolean;
 }
 
@@ -37,7 +41,47 @@ export interface PavedaPackManifest {
 		packMajor: 1;
 		pavedaMinVersion: "0.1.0";
 	};
+	capabilities: PackCapability[];
+	riskSurfaces: PackRiskSurface[];
+	requiredEvidence: string[];
+	requiredProfiles: string[];
+	publisher?: string;
+	signature?: PackSignature;
 	entries: PackEntry[];
+}
+
+export type PackCapability = "read" | "write" | "shell" | "git" | "mcp";
+
+export type PackRiskSurface =
+	| "auth"
+	| "payment"
+	| "data"
+	| "infra"
+	| "public-api"
+	| "ui-only"
+	| "docs-only"
+	| "mixed";
+
+export interface PackSignature {
+	keyId: string;
+	algorithm: string;
+}
+
+export interface PackPermissionSummary {
+	capabilities: PackCapability[];
+	riskSurfaces: PackRiskSurface[];
+	requiredEvidence: string[];
+	requiredProfiles: string[];
+	publisher: string | null;
+	signed: boolean;
+}
+
+export interface PackHostCompatibilitySummary {
+	host: string | null;
+	requiredCapabilities: PackCapability[];
+	supportedCapabilities: PackCapability[];
+	unsupportedCapabilities: PackCapability[];
+	warnings: string[];
 }
 
 export interface BuildPackResult {
@@ -51,6 +95,7 @@ export interface BuildPackResult {
 export interface InspectPackResult {
 	ok: boolean;
 	manifest: PavedaPackManifest | null;
+	permissions: PackPermissionSummary | null;
 	checksums: Record<string, string>;
 	entries: PackEntry[];
 	errors: string[];
@@ -59,7 +104,10 @@ export interface InspectPackResult {
 export interface VerifyPackResult {
 	ok: boolean;
 	errors: string[];
+	warnings: string[];
 	manifest: PavedaPackManifest | null;
+	permissions: PackPermissionSummary | null;
+	hostCompatibility: PackHostCompatibilitySummary | null;
 	checkedFiles: number;
 }
 
@@ -74,8 +122,11 @@ export interface PackInstallChange {
 export interface InstallPackResult {
 	ok: boolean;
 	dryRun: boolean;
+	permissions: PackPermissionSummary | null;
+	hostCompatibility: PackHostCompatibilitySummary | null;
 	changes: PackInstallChange[];
 	errors: string[];
+	warnings: string[];
 }
 
 interface PackFile {
@@ -104,6 +155,7 @@ export function buildPack(options: BuildPackOptions): BuildPackResult {
 			packMajor: 1,
 			pavedaMinVersion: "0.1.0",
 		},
+		...readPackPermissionPolicy(cwd),
 		entries,
 	};
 	const manifestFile = {
@@ -142,6 +194,7 @@ export function inspectPack(options: InspectPackOptions): InspectPackResult {
 	return {
 		ok: errors.length === 0,
 		manifest,
+		permissions: manifest ? summarizePackPermissions(manifest) : null,
 		checksums,
 		entries: manifest?.entries ?? [],
 		errors,
@@ -150,10 +203,23 @@ export function inspectPack(options: InspectPackOptions): InspectPackResult {
 
 export function verifyPack(options: VerifyPackOptions): VerifyPackResult {
 	const inspected = inspectPack(options);
+	const hostCompatibility = inspected.manifest
+		? evaluatePackHostCompatibility(inspected.manifest, options.host)
+		: null;
+	const hostErrors = hostCompatibility
+		? hostCompatibility.unsupportedCapabilities.map(
+				(capability) =>
+					`unsupported pack capability for host ${hostCompatibility.host}: ${capability}`,
+			)
+		: [];
+	const errors = [...inspected.errors, ...hostErrors];
 	return {
-		ok: inspected.ok,
-		errors: inspected.errors,
+		ok: errors.length === 0,
+		errors,
+		warnings: hostCompatibility?.warnings ?? [],
 		manifest: inspected.manifest,
+		permissions: inspected.permissions,
+		hostCompatibility,
 		checkedFiles: Object.keys(inspected.checksums).length,
 	};
 }
@@ -165,8 +231,22 @@ export function installPack(options: InstallPackOptions): InstallPackResult {
 	const checksums = parseChecksums(parsed.files.get("checksums.json"));
 	const errors = validatePack(parsed, manifest, checksums);
 	if (!manifest) {
-		return { ok: false, dryRun: !options.write, changes: [], errors };
+		return {
+			ok: false,
+			dryRun: !options.write,
+			permissions: null,
+			hostCompatibility: null,
+			changes: [],
+			errors,
+			warnings: [],
+		};
 	}
+	const permissions = summarizePackPermissions(manifest);
+	const hostCompatibility = evaluatePackHostCompatibility(manifest, options.host);
+	const hostErrors = hostCompatibility.unsupportedCapabilities.map(
+		(capability) => `unsupported pack capability for host ${hostCompatibility.host}: ${capability}`,
+	);
+	const allErrors = [...errors, ...hostErrors];
 	const changes = manifest.entries.map((entry) => {
 		const projectPath = packPathToProjectPath(cwd, entry.path);
 		const current = existsSync(projectPath) ? readFileSync(projectPath) : null;
@@ -181,8 +261,16 @@ export function installPack(options: InstallPackOptions): InstallPackResult {
 			currentSha256,
 		};
 	});
-	if (errors.length > 0) {
-		return { ok: false, dryRun: !options.write, changes, errors };
+	if (allErrors.length > 0) {
+		return {
+			ok: false,
+			dryRun: !options.write,
+			permissions,
+			hostCompatibility,
+			changes,
+			errors: allErrors,
+			warnings: hostCompatibility.warnings,
+		};
 	}
 	if (options.write) {
 		for (const change of changes) {
@@ -201,8 +289,11 @@ export function installPack(options: InstallPackOptions): InstallPackResult {
 	return {
 		ok: true,
 		dryRun: !options.write,
+		permissions,
+		hostCompatibility,
 		changes,
 		errors: [],
+		warnings: hostCompatibility.warnings,
 	};
 }
 
@@ -345,6 +436,32 @@ function validatePack(
 			errors.push(`manifest size mismatch for ${entry.path}`);
 		}
 	}
+	errors.push(...validateProfileThresholdPolicy(parsed, manifest));
+	errors.push(...validatePackPermissionPolicy(manifest));
+	return errors;
+}
+
+function validateProfileThresholdPolicy(
+	parsed: ParsedPack,
+	manifest: PavedaPackManifest | null,
+): string[] {
+	const errors: string[] = [];
+	for (const entry of manifest?.entries ?? []) {
+		if (!entry.path.startsWith("contracts/profiles/") || !entry.path.endsWith(".json")) {
+			continue;
+		}
+		const profileName = entry.path.slice("contracts/profiles/".length);
+		const baseline = readBaselineProfile(profileName);
+		const candidate = parseJsonObject(parsed.files.get(entry.path));
+		const baselineThresholds = thresholdPassByMetric(baseline);
+		const candidateThresholds = thresholdPassByMetric(candidate);
+		for (const [metric, baselinePass] of baselineThresholds.entries()) {
+			const candidatePass = candidateThresholds.get(metric);
+			if (candidatePass !== undefined && candidatePass < baselinePass) {
+				errors.push(`profile threshold lowered: ${profileName}:${metric}`);
+			}
+		}
+	}
 	return errors;
 }
 
@@ -367,8 +484,158 @@ function parseManifest(content: Buffer | undefined): PavedaPackManifest | null {
 			packMajor: 1,
 			pavedaMinVersion: "0.1.0",
 		},
+		capabilities: readPackCapabilities(parsed.capabilities),
+		riskSurfaces: readPackRiskSurfaces(parsed.riskSurfaces),
+		requiredEvidence: readStringArray(parsed.requiredEvidence),
+		requiredProfiles: readStringArray(parsed.requiredProfiles),
+		...(typeof parsed.publisher === "string" ? { publisher: parsed.publisher } : {}),
+		...(isPackSignature(parsed.signature) ? { signature: parsed.signature } : {}),
 		entries: parsed.entries.filter(isPackEntry),
 	};
+}
+
+function readPackPermissionPolicy(
+	cwd: string,
+): Omit<PavedaPackManifest, "schemaVersion" | "generatedBy" | "compatibility" | "entries"> {
+	const path = join(cwd, ".paveda", "pack-policy.json");
+	if (!existsSync(path)) {
+		return {
+			capabilities: [],
+			riskSurfaces: [],
+			requiredEvidence: [],
+			requiredProfiles: [],
+		};
+	}
+	const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+	return {
+		capabilities: readPackCapabilities(parsed.capabilities),
+		riskSurfaces: readPackRiskSurfaces(parsed.riskSurfaces),
+		requiredEvidence: readStringArray(parsed.requiredEvidence),
+		requiredProfiles: readStringArray(parsed.requiredProfiles),
+		...(typeof parsed.publisher === "string" ? { publisher: parsed.publisher } : {}),
+		...(isPackSignature(parsed.signature) ? { signature: parsed.signature } : {}),
+	};
+}
+
+function validatePackPermissionPolicy(manifest: PavedaPackManifest | null): string[] {
+	if (!manifest) {
+		return [];
+	}
+	const errors: string[] = [];
+	const unknownCapabilities = readStringArray(
+		(manifest as unknown as { capabilities?: unknown }).capabilities,
+	).filter((capability) => !isPackCapability(capability));
+	for (const capability of unknownCapabilities) {
+		errors.push(`unknown pack capability: ${capability}`);
+	}
+	const highRisk = manifest.riskSurfaces.filter(isHighRiskSurface);
+	const evidence = new Set(manifest.requiredEvidence);
+	if (highRisk.length > 0 && !evidence.has("security_scan") && !evidence.has("risk_review")) {
+		errors.push(
+			`high-risk pack surfaces require security_scan or risk_review evidence: ${highRisk.join(",")}`,
+		);
+	}
+	if (manifest.requiredProfiles.includes("release") && !manifest.signature) {
+		errors.push("release pack policy requires signature metadata");
+	}
+	return errors;
+}
+
+function evaluatePackHostCompatibility(
+	manifest: PavedaPackManifest,
+	host: string | undefined,
+): PackHostCompatibilitySummary {
+	if (!host) {
+		return {
+			host: null,
+			requiredCapabilities: manifest.capabilities,
+			supportedCapabilities: [],
+			unsupportedCapabilities: [],
+			warnings:
+				manifest.capabilities.length > 0
+					? ["pack host compatibility was not checked; pass --host to verify target support"]
+					: [],
+		};
+	}
+	const capability = resolveHostCapability(host);
+	const supportedCapabilities = manifest.capabilities.filter((packCapability) =>
+		hostSupportsPackCapability(capability, packCapability),
+	);
+	const supported = new Set(supportedCapabilities);
+	return {
+		host: capability.host,
+		requiredCapabilities: manifest.capabilities,
+		supportedCapabilities,
+		unsupportedCapabilities: manifest.capabilities.filter((item) => !supported.has(item)),
+		warnings: [],
+	};
+}
+
+function hostSupportsPackCapability(
+	host: ReturnType<typeof resolveHostCapability>,
+	capability: PackCapability,
+): boolean {
+	const covered = new Set(host.coveredToolMatchers.map((item) => item.toLowerCase()));
+	switch (capability) {
+		case "read":
+			return (
+				covered.has("read") || covered.has("edit") || covered.has("write") || covered.has("bash")
+			);
+		case "write":
+			return covered.has("write") || covered.has("edit") || covered.has("apply_patch");
+		case "shell":
+			return covered.has("bash");
+		case "git":
+			return covered.has("git") || covered.has("bash");
+		case "mcp":
+			return host.supportsMcpGateway || covered.has("mcp");
+	}
+}
+
+function summarizePackPermissions(manifest: PavedaPackManifest): PackPermissionSummary {
+	return {
+		capabilities: manifest.capabilities,
+		riskSurfaces: manifest.riskSurfaces,
+		requiredEvidence: manifest.requiredEvidence,
+		requiredProfiles: manifest.requiredProfiles,
+		publisher: manifest.publisher ?? null,
+		signed: Boolean(manifest.signature),
+	};
+}
+
+function readBaselineProfile(profileName: string): Record<string, unknown> | null {
+	const path = join(
+		dirname(fileURLToPath(import.meta.url)),
+		"..",
+		"..",
+		"assets",
+		"harness",
+		"contracts",
+		"profiles",
+		profileName,
+	);
+	return parseJsonObject(existsSync(path) ? readFileSync(path) : undefined);
+}
+
+function parseJsonObject(content: Buffer | undefined): Record<string, unknown> | null {
+	if (!content) {
+		return null;
+	}
+	const parsed = JSON.parse(content.toString("utf8")) as unknown;
+	return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+		? (parsed as Record<string, unknown>)
+		: null;
+}
+
+function thresholdPassByMetric(profile: Record<string, unknown> | null): Map<string, number> {
+	const thresholds = Array.isArray(profile?.scoreThresholds) ? profile.scoreThresholds : [];
+	const entries = thresholds
+		.filter((threshold): threshold is { metric: string; pass: number } => {
+			const record = threshold as { metric?: unknown; pass?: unknown };
+			return typeof record.metric === "string" && typeof record.pass === "number";
+		})
+		.map((threshold) => [threshold.metric, threshold.pass] as const);
+	return new Map(entries);
 }
 
 function parseChecksums(content: Buffer | undefined): Record<string, string> {
@@ -381,6 +648,58 @@ function parseChecksums(content: Buffer | undefined): Record<string, string> {
 			(entry): entry is [string, string] =>
 				typeof entry[0] === "string" && typeof entry[1] === "string",
 		),
+	);
+}
+
+function readPackCapabilities(value: unknown): PackCapability[] {
+	return readStringArray(value) as PackCapability[];
+}
+
+function readPackRiskSurfaces(value: unknown): PackRiskSurface[] {
+	return readStringArray(value).filter(isPackRiskSurface);
+}
+
+function readStringArray(value: unknown): string[] {
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === "string")
+		: [];
+}
+
+function isPackCapability(value: string): value is PackCapability {
+	return (
+		value === "read" || value === "write" || value === "shell" || value === "git" || value === "mcp"
+	);
+}
+
+function isPackRiskSurface(value: string): value is PackRiskSurface {
+	return (
+		value === "auth" ||
+		value === "payment" ||
+		value === "data" ||
+		value === "infra" ||
+		value === "public-api" ||
+		value === "ui-only" ||
+		value === "docs-only" ||
+		value === "mixed"
+	);
+}
+
+function isHighRiskSurface(value: PackRiskSurface): boolean {
+	return (
+		value === "auth" ||
+		value === "payment" ||
+		value === "data" ||
+		value === "infra" ||
+		value === "public-api"
+	);
+}
+
+function isPackSignature(value: unknown): value is PackSignature {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		typeof (value as PackSignature).keyId === "string" &&
+		typeof (value as PackSignature).algorithm === "string"
 	);
 }
 

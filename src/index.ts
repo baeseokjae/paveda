@@ -26,6 +26,7 @@ export * as pack from "./pack/index.js";
 export * as projection from "./projection/index.js";
 export * as progress from "./progress/index.js";
 export * as reporters from "./reporters/index.js";
+export * as setup from "./setup/index.js";
 export * as store from "./store/index.js";
 export * as skillLoader from "./skill-loader/index.js";
 export * as router from "./router/index.js";

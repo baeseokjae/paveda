@@ -561,6 +561,46 @@ describe("EventStore", () => {
 			evidenceId: evidence.id,
 		});
 		expect(
+			store.recordIterationFingerprint({
+				runId: run.runId,
+				phaseId: "execute",
+				iteration: 1,
+				outputHash: "a".repeat(64),
+				diffHash: "b".repeat(64),
+				failureFingerprint: "unit-gate:missing",
+				verificationScore: 0.25,
+				taxonomy: ["spinning"],
+				ts: 126,
+			}),
+		).toMatchObject({
+			runId: run.runId,
+			phaseId: "execute",
+			iteration: 1,
+			outputHash: "a".repeat(64),
+			diffHash: "b".repeat(64),
+			failureFingerprint: "unit-gate:missing",
+			verificationScore: 0.25,
+			taxonomy: ["spinning"],
+		});
+		expect(
+			store.recordIterationFingerprint({
+				runId: run.runId,
+				phaseId: "execute",
+				iteration: 1,
+				outputHash: "c".repeat(64),
+				verificationScore: 0.5,
+				taxonomy: ["no_drift"],
+				ts: 127,
+			}),
+		).toMatchObject({
+			iteration: 1,
+			outputHash: "c".repeat(64),
+			diffHash: null,
+			failureFingerprint: null,
+			verificationScore: 0.5,
+			taxonomy: ["no_drift"],
+		});
+		expect(
 			store.recordPolicyViolation({
 				runId: run.runId,
 				policyId: "unit-gate",
@@ -580,6 +620,7 @@ describe("EventStore", () => {
 		expect(store.listArtifacts(run.runId)).toHaveLength(1);
 		expect(store.listEvidence(run.runId)).toHaveLength(1);
 		expect(store.listScores(run.runId)).toHaveLength(1);
+		expect(store.listIterationFingerprints(run.runId)).toHaveLength(1);
 		expect(store.completeRun(run.runId, "completed", 130)).toMatchObject({
 			status: "completed",
 			completedAt: 130,
@@ -740,7 +781,7 @@ describe("EventStore", () => {
 				.prepare("SELECT name FROM schema_migrations WHERE version = ?")
 				.get(CURRENT_SCHEMA_VERSION),
 		).toMatchObject({
-			name: "ledger_search_fts",
+			name: "iteration_fingerprints",
 		});
 
 		store.close();

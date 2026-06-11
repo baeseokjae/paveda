@@ -63,7 +63,7 @@ cd /private/tmp/paveda-pack-smoke
 pnpm add /private/tmp/paveda-0.1.0.tgz
 pnpm exec paveda help
 pnpm exec paveda skills
-pnpm exec paveda init --host codex --cwd /private/tmp/paveda-pack-smoke-project --write --force
+pnpm exec paveda setup --host codex --cwd /private/tmp/paveda-pack-smoke-project --write
 pnpm exec paveda skills install do --cwd /private/tmp/paveda-pack-smoke-project
 pnpm exec paveda skills install-bundle --host codex --cwd /private/tmp/paveda-pack-smoke-bundle --skills do,verify --write --force
 pnpm exec paveda skills status --host codex --cwd /private/tmp/paveda-pack-smoke-bundle
@@ -114,6 +114,7 @@ smoke 수준으로 측정하고 spec의 비기능 목표를 넘으면 실패한�
 - tarball에 `assets/harness/context-modules/*.md` canonical context modules가 포함된다.
 - `pnpm exec paveda help`가 CLI 도움말을 출력한다.
 - packaged builtin core skills(`/do`, `/specify`, `/plan`, `/verify`, `/debug`, `/commit`, `/pr`, `/surgical-edits`)가 로드된다.
+- `setup --host <host> --write`가 첫 실행 명령으로 host bundle, doctor, runtime smoke를 연결한다.
 - optional portable skills(`/docs-writer`, `/review`, `/browser-validate`, `/dead-code`)는 `--include-optional` 또는 명시적 `--skills`로 설치된다.
 - `runtime-smoke`가 synthetic hook session을 EventStore에 기록하고 replay/status materialization을 확인한다.
 - `adoption-report`가 host readiness, policy source, `/do` route gate, runtime smoke를 한 JSON으로 요약하고, doctor 실패 시 실패한 체크 이름과 경로를 포함한다.
@@ -178,6 +179,7 @@ Hermes installer는 `.hermes/config.yaml`의 `hooks:` 섹션에 Paveda shell hoo
 node dist/cli.js skills
 node dist/cli.js skills status
 node dist/cli.js skills status --host codex
+node dist/cli.js skills test do
 node dist/cli.js skills enable-router do
 node dist/cli.js skills enable-router do --write
 node dist/cli.js skills install do
@@ -187,6 +189,8 @@ node dist/cli.js skills install-bundle --host codex --include-optional
 node dist/cli.js skills install-bundle --host codex --skills docs-writer,review
 node dist/cli.js skills install-bundle --host pi --write
 node dist/cli.js init --host codex --cwd /path/to/project
+node dist/cli.js setup --host codex --cwd /path/to/project
+node dist/cli.js setup --host codex --cwd /path/to/project --write
 node dist/cli.js init --host codex --cwd /path/to/project --write
 node dist/cli.js init --host claude-code --cwd /path/to/project --cli-path /path/to/paveda/dist/cli.js --write
 node dist/cli.js contract validate --cwd /path/to/project --host codex --profile strict
@@ -202,6 +206,9 @@ node dist/cli.js evidence collect --cwd /path/to/project --run <run_id> --kind u
 node dist/cli.js verify --cwd /path/to/project --run <run_id> --profile strict --collect --report-dir /tmp/paveda-reports
 node dist/cli.js status --cwd /path/to/project --run <run_id> --format markdown
 node dist/cli.js progress --cwd /path/to/project --run <run_id> --watch
+node dist/cli.js monitor --cwd /path/to/project --run <run_id> --format markdown
+node dist/cli.js report --cwd /path/to/project --run <run_id> --html --write /tmp/paveda-run.html
+node dist/cli.js report --cwd /path/to/project --run <run_id> --markdown --write /tmp/paveda-run.md
 node dist/cli.js handoff --cwd /path/to/project --run <run_id> --markdown
 node dist/cli.js search --cwd /path/to/project --run <run_id> --query "security scan"
 node dist/cli.js artifacts list --cwd /path/to/project --run <run_id>

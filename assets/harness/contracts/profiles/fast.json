@@ -86,6 +86,36 @@
     "unit_test",
     "semantic_review"
   ],
+  "verificationStages": [
+    {
+      "stage": "mechanical",
+      "required": true,
+      "threshold": 0.8,
+      "triggeredBy": [
+        "verification:deterministic"
+      ],
+      "allowNotApplicable": true
+    },
+    {
+      "stage": "semantic",
+      "required": false,
+      "threshold": 0.7,
+      "triggeredBy": [
+        "semantic:low-confidence"
+      ],
+      "allowNotApplicable": true
+    },
+    {
+      "stage": "consensus",
+      "required": false,
+      "threshold": 0.7,
+      "triggeredBy": [
+        "risk:high",
+        "profile:release"
+      ],
+      "allowNotApplicable": true
+    }
+  ],
   "overridePolicy": {
     "allowedModes": [
       "approve-override",

@@ -339,3 +339,44 @@ paveda check playwright-setup --cwd /path/to/project --json
 
 Use checks for acceptance gates that are not lifecycle hooks, such as browser or
 MCP setup verification.
+
+## 12. Setup Modes
+
+Use `paveda setup` as the first command for new projects. It detects installed
+host CLIs, prepares a dry-run install plan, and prints one next command.
+
+| Mode | Use when | Behavior |
+| --- | --- | --- |
+| `lite` | You want the smallest host bundle. | Installs the selected core host bundle and runs doctor/runtime checks when `--write` is present. |
+| `managed` | You want Paveda to install optional managed assets too. | Includes optional bundle assets where supported by the selected host. |
+
+Examples:
+
+```bash
+paveda setup --host codex --cwd /path/to/project
+paveda setup --host codex --mode managed --cwd /path/to/project --write
+paveda setup --all --cwd /path/to/project --write
+```
+
+Dry-run setup does not write files. With `--write`, a blocked doctor result exits
+non-zero.
+
+## 13. Install Shared Packs
+
+Inspect packs without host assumptions:
+
+```bash
+paveda pack inspect /tmp/paveda-pack.tgz
+```
+
+Verify and install packs against the host that will consume them:
+
+```bash
+paveda pack verify /tmp/paveda-pack.tgz --host codex
+paveda pack install /tmp/paveda-pack.tgz --cwd /path/to/project --host codex
+paveda pack install /tmp/paveda-pack.tgz --cwd /path/to/project --host codex --write
+```
+
+`pack verify --host` and `pack install --host` block unsupported pack
+capabilities before files are written. Running without `--host` remains
+host-neutral and reports that host compatibility was not checked.

@@ -145,6 +145,40 @@
     "semantic_review",
     "risk_review"
   ],
+  "verificationStages": [
+    {
+      "stage": "mechanical",
+      "required": true,
+      "threshold": 0.9,
+      "triggeredBy": [
+        "verification:deterministic"
+      ],
+      "allowNotApplicable": true
+    },
+    {
+      "stage": "semantic",
+      "required": true,
+      "threshold": 0.85,
+      "triggeredBy": [
+        "verification:semantic"
+      ],
+      "allowNotApplicable": true
+    },
+    {
+      "stage": "consensus",
+      "required": false,
+      "threshold": 0.85,
+      "triggeredBy": [
+        "risk:auth",
+        "risk:payment",
+        "risk:data",
+        "risk:infra",
+        "risk:public-api",
+        "profile:release"
+      ],
+      "allowNotApplicable": true
+    }
+  ],
   "overridePolicy": {
     "allowedModes": [
       "approve-override",
