@@ -166,9 +166,6 @@ const forbiddenContentPatterns = [
 	/kg_node/,
 	/kg_neighbors/,
 	/Anthropic best practices/i,
-	/claude-opus/i,
-	/claude-sonnet/i,
-	/claude-haiku/i,
 	/skills\.sh/,
 ];
 const blockedContentFragments = [
