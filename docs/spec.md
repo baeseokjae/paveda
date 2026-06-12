@@ -536,7 +536,9 @@ is treated as missing.
 
 ### 11.2 Verification stages
 
-`paveda verify` reports `mechanical`, `semantic`, and `consensus` stages.
+`paveda verify` reports `mechanical`, `semantic`, `consensus`, and `review` stages.
+`review` is produced by `paveda verify --run <id> --stage review` and records
+`review.stage` and `review.severity` events.
 Consensus is required when any trigger is present:
 
 - `profile:release`
@@ -564,3 +566,43 @@ iteration in `strict` and `release`.
 ## 12. 관련 문서
 
 - 모듈별 동작 요약: [`docs/architecture.md`](./architecture.md).
+
+## 13. Phase 3 optional features (v0.4+)
+
+### 13.1 Completion gate
+
+- Hook: `harness.session.complete` → `evaluateCompletionGate()`
+- Check: latest `verification_score` for the associated run
+- Profile:
+  - `minimal` → off (no check)
+  - `standard` → warn
+  - `strict` → block
+- Event: `session.completion_gate`, payload includes `verificationPassed`, `action`, `runId`
+- Session completion event includes `verification_passed: boolean`
+
+### 13.2 `/unstuck` portable skill
+
+- Optional skill at `assets/harness/skills/optional/unstuck/SKILL.md`
+- 5 personas: Contrarian, Simplifier, Hacker, Researcher, Architect
+- Install: `paveda skills install unstuck --write`
+
+### 13.3 Background workers
+
+- CLI: `paveda worker schedule/list/run/logs`
+- Tasks: `doctor`, `adoption-report`, `security-scan`
+- Event: `worker.run`, payload includes `name`, `task`, `ok`, `output`
+- Schedule config stored in `.paveda/workers.json`
+
+### 13.4 Deterministic semantic search
+
+- CLI: `paveda search --semantic --query <text> --limit <n> --since <ts>`
+- MCP: `paveda.search_semantic`
+- Implementation: zero-dependency token-vector cosine similarity
+- Embedding-backed vector search is deferred to a future release
+
+### 13.5 Cost tracking
+
+Cost guard tracks USD **and tokens** via `session.cost.summary` events.
+SessionSummary (status CLI table) exposes `costUsd`, `toolCalls`, `agentSpawns`.
+Token data can be read from `paveda events --session <id>` filtered for `session.cost.summary`.
+Environment variables: `PAVEDA_COST_GUARD_MAX_USD`, `PAVEDA_COST_GUARD_MAX_TOKENS`.

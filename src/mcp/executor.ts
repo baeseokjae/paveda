@@ -13,9 +13,11 @@ import {
 	projectWorkflowState,
 } from "../policy/index.js";
 import type { EventRecord, EventStore, PolicyDecisionRecord } from "../store/index.js";
+import { semanticSearchLedger } from "../store/semantic-search.js";
 
 export type PavedaMcpToolName =
 	| "paveda.search"
+	| "paveda.search_semantic"
 	| "paveda.read"
 	| "paveda.patch"
 	| "paveda.shell"
@@ -58,7 +60,7 @@ export function executeMcpTool(options: ExecuteMcpToolOptions): McpToolExecution
 	const cwd = resolve(options.cwd ?? process.cwd());
 	const sessionId = options.sessionId ?? DEFAULT_SESSION_ID;
 	const ts = options.ts ?? Date.now();
-	const prepared = prepareMcpTool(toolName, options.arguments, cwd);
+	const prepared = prepareMcpTool(toolName, options.arguments, cwd, options.store);
 	const payload = {
 		host: "mcp",
 		cwd,
@@ -177,12 +179,19 @@ export function executeMcpTool(options: ExecuteMcpToolOptions): McpToolExecution
 	}
 }
 
-function prepareMcpTool(name: PavedaMcpToolName, args: unknown, cwd: string): PreparedMcpTool {
+function prepareMcpTool(
+	name: PavedaMcpToolName,
+	args: unknown,
+	cwd: string,
+	store: EventStore,
+): PreparedMcpTool {
 	const input = isRecord(args) ? args : {};
 
 	switch (name) {
 		case "paveda.search":
 			return prepareSearch(input, cwd);
+		case "paveda.search_semantic":
+			return prepareSemanticSearch(input, store);
 		case "paveda.read":
 			return prepareRead(input, cwd);
 		case "paveda.patch":
@@ -211,6 +220,24 @@ function prepareSearch(input: Record<string, unknown>, cwd: string): PreparedMcp
 		toolInput: { query, glob, limit },
 		run: () => ({
 			matches: runCommand("rg", rgArgs, cwd),
+		}),
+	};
+}
+
+function prepareSemanticSearch(input: Record<string, unknown>, store: EventStore): PreparedMcpTool {
+	const query = requireString(input, "query");
+	const topK = readPositiveInteger(input, "top_k") ?? 5;
+	const since = readString(input, "since");
+	return {
+		name: "paveda.search_semantic",
+		toolName: "mcp",
+		toolInput: { query, top_k: topK, since },
+		run: () => ({
+			results: semanticSearchLedger(store, {
+				query,
+				limit: topK,
+				since: since ? Date.parse(since) : undefined,
+			}),
 		}),
 	};
 }
@@ -383,6 +410,7 @@ function runCommand(command: string, args: string[], cwd: string): string {
 function parseMcpToolName(value: string): PavedaMcpToolName {
 	if (
 		value === "paveda.search" ||
+		value === "paveda.search_semantic" ||
 		value === "paveda.read" ||
 		value === "paveda.patch" ||
 		value === "paveda.shell" ||

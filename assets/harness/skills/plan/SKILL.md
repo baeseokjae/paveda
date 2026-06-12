@@ -203,6 +203,21 @@ Skill tool로 `/deep-research "{TASK_DESCRIPTION}의 핵심 외부 기술 공식
 
 ### Phase 4a: Planner Agent
 
+#### Bite-sized Task Decomposition Contract
+
+Planner output must decompose the approved spec into executable task objects. Each task MUST be small enough to complete in 2-5 minutes and MUST include:
+
+- `id`: stable task id such as `task-1`
+- `title`: concise action title
+- `files`: exact repo-relative file paths to modify
+- `signatures`: function/class/type signatures to create or change
+- `acceptance`: one-sentence observable acceptance criterion
+- `verification`: executable verification command(s) from project root
+- `dependencies`: ids of prerequisite tasks
+- `estimated_minutes`: integer in the 2-5 range
+
+If any task exceeds 5 minutes, split it. Order tasks by dependency graph and reject circular dependencies. Store the final task list in the Product Spec under a `### Bite-sized Tasks` section as a JSON array. When a run records this plan in EventStore, use event type `plan.generated` with `tasks`, `total_estimated_minutes`, and `dependency_graph` in the payload.
+
 `PM_CONTEXT` 결정:
 - `--from-spec` 또는 Phase 1.5 경유 → 스펙 파일의 `### 문제 정의` 섹션을 로드
 - `--from-deferred` → `DEFERRED_CONTEXT` 전체 사용

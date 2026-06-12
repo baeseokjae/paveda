@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { PavedaConfig } from "../src/core/index.js";
 import { dispatchHookEvent } from "../src/hook-runtime/index.js";
-import { evaluateCostGuard } from "../src/hooks/cost-guard.js";
+import { evaluateCostGuard, extractCost } from "../src/hooks/cost-guard.js";
 import { EventStore } from "../src/store/index.js";
 
 const tempDirs: string[] = [];
@@ -16,6 +16,17 @@ afterEach(() => {
 });
 
 describe("cost guard", () => {
+	it("extracts cost and token usage from common host payload shapes", () => {
+		expect(extractCost({ costUsd: 1.25, usage: { input_tokens: 10, output_tokens: 15 } })).toEqual({
+			costUsd: 1.25,
+			tokensUsed: 25,
+		});
+		expect(extractCost({ cost_usd: 0.5, usage: { total_tokens: 42 } })).toEqual({
+			costUsd: 0.5,
+			tokensUsed: 42,
+		});
+	});
+
 	it("warns when session elapsed time exceeds the configured maximum", () => {
 		const store = openTempStore();
 
@@ -118,6 +129,8 @@ function config(overrides: Partial<PavedaConfig> = {}): PavedaConfig {
 		sessionStartContext: false,
 		sessionStartMaxChars: 8000,
 		costGuardMaxMinutes: 120,
+		costGuardMaxUsd: 5,
+		costGuardMaxTokens: 1_000_000,
 		costGuardAgentWarningThreshold: 5,
 		costGuardAgentCompactInterval: 3,
 		...overrides,

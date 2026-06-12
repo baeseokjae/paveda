@@ -35,6 +35,7 @@ import { installClaudeCode } from "./install/claude-code.js";
 import { installCodex } from "./install/codex.js";
 import { installHermes } from "./install/hermes.js";
 import { installPi } from "./install/pi.js";
+import { autoExtractInstincts } from "./learning/auto-extract.js";
 import {
 	explainLearningPattern,
 	exportSharedLearningPattern,
@@ -100,6 +101,9 @@ import type {
 	SessionSummary,
 	StoreScope,
 } from "./store/index.js";
+import { semanticSearchLedger } from "./store/semantic-search.js";
+import { listWorkers, runWorker, scheduleWorker, workerLogs } from "./worker/index.js";
+import { createWorktree, finishWorktree, listWorktrees } from "./worktree/index.js";
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -455,6 +459,44 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 		return;
 	}
 
+	if (command === "worktree") {
+		const subcommand = requirePositional(args, 0, "worktree command");
+		const worktreeArgs = args.slice(1);
+		if (subcommand === "create") {
+			printJson(
+				createWorktree({
+					cwd: readOption(worktreeArgs, "--cwd"),
+					name: requireOption(worktreeArgs, "--name"),
+					base: readOption(worktreeArgs, "--base"),
+					host: readOption(worktreeArgs, "--host"),
+					write: worktreeArgs.includes("--write"),
+					dbPath: readOption(worktreeArgs, "--db"),
+					storeScope: parseStoreScope(readOption(worktreeArgs, "--store-scope")),
+				}),
+			);
+			return;
+		}
+		if (subcommand === "list") {
+			printJson(listWorktrees({ cwd: readOption(worktreeArgs, "--cwd") }));
+			return;
+		}
+		if (subcommand === "finish") {
+			printJson(
+				finishWorktree({
+					cwd: readOption(worktreeArgs, "--cwd"),
+					name: requireOption(worktreeArgs, "--name"),
+					action: readOption(worktreeArgs, "--action"),
+					dryRun: worktreeArgs.includes("--dry-run"),
+					force: worktreeArgs.includes("--force"),
+					dbPath: readOption(worktreeArgs, "--db"),
+					storeScope: parseStoreScope(readOption(worktreeArgs, "--store-scope")),
+				}),
+			);
+			return;
+		}
+		throw new Error(`Unknown worktree command: ${subcommand}`);
+	}
+
 	if (command === "do") {
 		const objective = readDoObjective(args);
 		const result = startPavedaDo({
@@ -524,6 +566,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			runId: requireOption(args, "--run"),
 			profile: parseOptionalPavedaProfile(readOption(args, "--profile")),
 			stage: readOption(args, "--stage"),
+			task: readOption(args, "--task"),
 			write: args.includes("--write"),
 			dbPath: readOption(args, "--db"),
 			storeScope: parseStoreScope(readOption(args, "--store-scope")),
@@ -822,9 +865,59 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 				router: skill.frontmatter.router,
 				trigger: skill.frontmatter.trigger,
 				ambiguityRequired: skill.frontmatter.ambiguityRequired,
+				allowedProviders: skill.frontmatter.allowedProviders,
+				preferProvider: skill.frontmatter.preferProvider,
 			})),
 		);
 		return;
+	}
+
+	if (command === "worker") {
+		const subcommand = requirePositional(args, 0, "worker command");
+		const workerArgs = args.slice(1);
+		if (subcommand === "schedule") {
+			printJson(
+				scheduleWorker({
+					cwd: readOption(workerArgs, "--cwd"),
+					name: requireOption(workerArgs, "--name"),
+					task: requireOption(workerArgs, "--task"),
+					schedule: requireOption(workerArgs, "--schedule"),
+					host: readOption(workerArgs, "--host"),
+					write: workerArgs.includes("--write"),
+				}),
+			);
+			return;
+		}
+		if (subcommand === "list") {
+			printJson(listWorkers({ cwd: readOption(workerArgs, "--cwd") }));
+			return;
+		}
+		if (subcommand === "run") {
+			const result = runWorker({
+				cwd: readOption(workerArgs, "--cwd"),
+				name: readOption(workerArgs, "--name"),
+				task: readOption(workerArgs, "--task"),
+				host: readOption(workerArgs, "--host"),
+				dbPath: readOption(workerArgs, "--db"),
+				storeScope: parseStoreScope(readOption(workerArgs, "--store-scope")),
+			});
+			printJson(result);
+			if (!result.ok) process.exitCode = 1;
+			return;
+		}
+		if (subcommand === "logs") {
+			printJson(
+				workerLogs({
+					cwd: readOption(workerArgs, "--cwd"),
+					name: readOption(workerArgs, "--name"),
+					limit: parseOptionalPositiveInteger(readOption(workerArgs, "--limit"), "--limit"),
+					dbPath: readOption(workerArgs, "--db"),
+					storeScope: parseStoreScope(readOption(workerArgs, "--store-scope")),
+				}),
+			);
+			return;
+		}
+		throw new Error(`Unknown worker command: ${subcommand}`);
 	}
 
 	if (command === "port" || command === "ports") {
@@ -1056,12 +1149,14 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 		}
 
 		if (command === "search") {
+			const query = requireOption(args, "--query");
+			const runId = readOption(args, "--run");
+			const limit = parseOptionalPositiveInteger(readOption(args, "--limit"), "--limit");
+			const since = parseOptionalSince(readOption(args, "--since"), Date.now());
 			printJson(
-				store.searchLedger({
-					query: requireOption(args, "--query"),
-					runId: readOption(args, "--run"),
-					limit: parseOptionalPositiveInteger(readOption(args, "--limit"), "--limit"),
-				}),
+				args.includes("--semantic")
+					? semanticSearchLedger(store, { query, runId, limit, since })
+					: store.searchLedger({ query, runId, limit }),
 			);
 			return;
 		}
@@ -1165,6 +1260,26 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 				return;
 			}
 
+			if (subcommand === "auto-extract") {
+				printJson(
+					autoExtractInstincts({
+						store,
+						scope: parseOptionalInstinctScope(readOption(args, "--scope")),
+						since: parseOptionalSince(readOption(args, "--since"), Date.now()),
+						minOccurrences: parseOptionalPositiveInteger(
+							readOption(args, "--min-occurrences"),
+							"--min-occurrences",
+						),
+						minConfidence: parseOptionalNumber(
+							readOption(args, "--min-confidence"),
+							"--min-confidence",
+						),
+						dryRun: args.includes("--dry-run"),
+					}),
+				);
+				return;
+			}
+
 			throw new Error(`Unknown instincts command: ${subcommand}`);
 		}
 
@@ -1264,6 +1379,33 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			throw new Error(`Unknown learning command: ${subcommand}`);
 		}
 
+		if (command === "worker") {
+			const subcommand = requirePositional(args, 0, "worker command");
+			const workerArgs = args.slice(1);
+			if (subcommand === "schedule") {
+				requireOption(workerArgs, "--name");
+				requireOption(workerArgs, "--task");
+				requireOption(workerArgs, "--schedule");
+				readOption(workerArgs, "--host");
+				return;
+			}
+			if (subcommand === "list") {
+				return;
+			}
+			if (subcommand === "run") {
+				readOption(workerArgs, "--name");
+				readOption(workerArgs, "--task");
+				readOption(workerArgs, "--host");
+				return;
+			}
+			if (subcommand === "logs") {
+				readOption(workerArgs, "--name");
+				parseOptionalPositiveInteger(readOption(workerArgs, "--limit"), "--limit");
+				return;
+			}
+			throw new Error(`Unknown worker command: ${subcommand}`);
+		}
+
 		if (command === "route") {
 			const sessionId = readOption(args, "--session");
 			const result = parseOptionalRouterResult(readOption(args, "--result"));
@@ -1271,6 +1413,18 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			const skill = findSkill(loadSkills(readSkillLoadOptions(args)), skillName);
 			const input = {
 				skill: skillName,
+				mode: parseOptionalRouteMode(readOption(args, "--mode")),
+				maxRounds: parseOptionalPositiveInteger(readOption(args, "--max-rounds"), "--max-rounds"),
+				preferredProvider:
+					readOption(args, "--prefer-provider") ?? skill?.frontmatter.preferProvider,
+				allowedProviders:
+					parseOptionalCommaList(readOption(args, "--allowed-providers")) ??
+					skill?.frontmatter.allowedProviders,
+				failedProvider: readOption(args, "--failed-provider"),
+				activeInstincts: [
+					...store.listInstincts({ status: "active", includeExpired: false, limit: 20 }),
+					...store.listInstincts({ status: "promoted", includeExpired: false, limit: 20 }),
+				],
 				routerEnabled: skill ? isSkillRouterEnabled(skill) : undefined,
 				ambiguityRequired: skill?.frontmatter.ambiguityRequired,
 				signals: {
@@ -1335,7 +1489,8 @@ function isStoreBackedCommand(command: string): boolean {
 		command === "progress" ||
 		command === "handoff" ||
 		command === "route" ||
-		command === "hook"
+		command === "hook" ||
+		command === "worktree"
 	);
 }
 
@@ -1387,6 +1542,7 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 		requireOption(args, "--query");
 		readOption(args, "--run");
 		parseOptionalPositiveInteger(readOption(args, "--limit"), "--limit");
+		parseOptionalSince(readOption(args, "--since"), Date.now());
 		return;
 	}
 
@@ -1439,6 +1595,13 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 			parseInstinctStatus(requireOption(args, "--status"));
 			return;
 		}
+		if (subcommand === "auto-extract") {
+			parseOptionalInstinctScope(readOption(args, "--scope"));
+			parseOptionalSince(readOption(args, "--since"), Date.now());
+			parseOptionalPositiveInteger(readOption(args, "--min-occurrences"), "--min-occurrences");
+			parseOptionalNumber(readOption(args, "--min-confidence"), "--min-confidence");
+			return;
+		}
 		throw new Error(`Unknown instincts command: ${subcommand}`);
 	}
 
@@ -1489,15 +1652,27 @@ function preflightStoreBackedCommand(command: string, args: string[]): void {
 		throw new Error(`Unknown learning command: ${subcommand}`);
 	}
 
+	if (command === "worktree") {
+		const subcommand = requirePositional(args, 0, "worktree command");
+		if (subcommand === "create" || subcommand === "finish") {
+			requireOption(args.slice(1), "--name");
+		}
+		return;
+	}
+
 	if (command === "route") {
 		readOption(args, "--session");
 		parseOptionalRouterResult(readOption(args, "--result"));
 		parseOptionalRoutedSkill(readOption(args, "--skill"));
+		parseOptionalRouteMode(readOption(args, "--mode"));
 		readOption(args, "--target-root");
 		parseOptionalNonNegativeInteger(readOption(args, "--tool-retries"), "--tool-retries");
 		parseOptionalNonNegativeInteger(readOption(args, "--verify-failures"), "--verify-failures");
 		parseOptionalNumber(readOption(args, "--ambiguity-score"), "--ambiguity-score");
 		parseOptionalNumber(readOption(args, "--elapsed-minutes"), "--elapsed-minutes");
+		readOption(args, "--prefer-provider");
+		readOption(args, "--allowed-providers");
+		readOption(args, "--failed-provider");
 		if (args.includes("--host")) {
 			parseHostSkillBundleTarget(requireOption(args, "--host"));
 		}
@@ -1769,6 +1944,22 @@ function parseOptionalRouterResult(value: string | undefined): RouterDecisionRes
 	throw new Error(`Invalid router result: ${value}`);
 }
 
+function parseOptionalRouteMode(
+	value: string | undefined,
+): "evaluate" | "interview" | "greenfield" | "brownfield" | undefined {
+	if (
+		value === undefined ||
+		value === "evaluate" ||
+		value === "interview" ||
+		value === "greenfield" ||
+		value === "brownfield"
+	) {
+		return value;
+	}
+
+	throw new Error(`Unsupported route mode: ${value}`);
+}
+
 function parseOptionalRoutedSkill(value: string | undefined): RoutedSkill | undefined {
 	if (value === undefined || value === "do") {
 		return value;
@@ -2022,16 +2213,20 @@ function formatStatusMarkdown(sessions: readonly SessionSummary[]): string {
 		return [...lines, "No sessions found."].join("\n");
 	}
 
-	lines.push("| Session | Status | Started | Ended | Tool Calls | Agent Spawns | Cost USD |");
-	lines.push("|---|---|---|---|---:|---:|---:|");
+	lines.push("| Session | Status | Duration | Started | Tool Calls | Agent Spawns | Cost USD |");
+	lines.push("|---|---|---|---:|---:|---:|---:|");
 
 	for (const session of sessions) {
+		const duration =
+			session.endedAt === null
+				? ""
+				: `${Math.round((session.endedAt - session.startedAt) / 1000)}s`;
 		lines.push(
 			[
 				escapeMarkdownCell(session.id),
 				session.status,
+				duration,
 				formatTimestamp(session.startedAt),
-				session.endedAt === null ? "" : formatTimestamp(session.endedAt),
 				String(session.toolCalls),
 				String(session.agentSpawns),
 				session.costUsd.toFixed(4),
@@ -2646,6 +2841,10 @@ Common flow:
   conformance --host claude-code|codex|pi|hermes [--profile fast|standard|strict|release] [--cwd path] [--keep-artifacts] [--report-json path] [--report-junit path] [--report-dir path]
   adoption-report --host harness|claude-code|codex|pi|hermes [--cwd path] [--target-root path] [--policy-cache path] [--runtime-smoke] [--db path] [--store-scope project|user] [--session id] [--json]
   doctor [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path] [--policy-cache path] [--enforcement] [--json]
+  worker schedule --name id --task doctor|adoption-report|security-scan --schedule cron [--host host] [--write] [--cwd path]
+  worker list [--cwd path]
+  worker run [--name id | --task doctor|adoption-report|security-scan] [--host host] [--cwd path] [--db path]
+  worker logs [--name id] [--limit n] [--cwd path] [--db path]
   mcp serve [--cwd path] [--db path] [--store-scope project|user] [--session id]
   skills status [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path]
   skills test <name> [--cwd path] [--host harness|claude-code|codex|pi|hermes] [--target-root path]

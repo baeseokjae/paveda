@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { driftActionForProfile } from "../src/policy/drift.js";
 import {
 	PolicyEngine,
 	normalizeAgentEvent,
@@ -237,5 +238,31 @@ describe("policy runtime", () => {
 				}),
 			]),
 		);
+	});
+});
+
+describe("drift action matrix", () => {
+	it("returns block for strict profile at high drift", () => {
+		expect(driftActionForProfile("strict", "high")).toBe("block");
+	});
+
+	it("returns warn for standard at all drift levels", () => {
+		expect(driftActionForProfile("standard", "none")).toBe("warn");
+		expect(driftActionForProfile("standard", "low")).toBe("warn");
+		expect(driftActionForProfile("standard", "medium")).toBe("warn");
+		expect(driftActionForProfile("standard", "high")).toBe("warn");
+	});
+
+	it("returns block for release at all drift levels", () => {
+		expect(driftActionForProfile("release", "high")).toBe("block");
+		expect(driftActionForProfile("release", "medium")).toBe("block");
+	});
+
+	it("returns none for fast at any drift", () => {
+		expect(driftActionForProfile("fast", "high")).toBe("none");
+	});
+
+	it("returns none for unknown profile", () => {
+		expect(driftActionForProfile("unknown", "high")).toBe("none");
 	});
 });

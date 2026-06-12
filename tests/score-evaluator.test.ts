@@ -40,7 +40,9 @@ function makeThreshold(overrides: Partial<ScoreThreshold>): ScoreThreshold {
 	};
 }
 
-function makeEvidence(overrides: Partial<{ kind: string; result: "pass" | "fail" | "block" | "inconclusive" }> = {}) {
+function makeEvidence(
+	overrides: Partial<{ kind: string; result: "pass" | "fail" | "block" | "inconclusive" }> = {},
+) {
 	return {
 		id: 1,
 		runId: "r1",
@@ -237,7 +239,18 @@ describe("score evaluator", () => {
 			const threshold = makeThreshold({ metric: "plan_quality_score", pass: 0.9, block: 0.8 });
 			const context: ScoreContext = {
 				...emptyContext,
-				scores: [{ id: 1, runId: "r1", metric: "plan_quality_score", value: 0.95, decision: "pass", threshold: 0.9, rationale: null, ts: 1000 }],
+				scores: [
+					{
+						id: 1,
+						runId: "r1",
+						metric: "plan_quality_score",
+						value: 0.95,
+						decision: "pass",
+						threshold: 0.9,
+						rationale: null,
+						ts: 1000,
+					},
+				],
 			};
 
 			const result = evaluateScoreMetric(def, threshold, context);
@@ -288,7 +301,11 @@ describe("score evaluator", () => {
 				...emptyContext,
 				evidence: [
 					makeEvidence({ kind: "semantic_review", result: "pass" }),
-					{ ...makeEvidence({ kind: "semantic_review", result: "fail" }), id: 2, evidenceId: "ev2" },
+					{
+						...makeEvidence({ kind: "semantic_review", result: "fail" }),
+						id: 2,
+						evidenceId: "ev2",
+					},
 				],
 			};
 

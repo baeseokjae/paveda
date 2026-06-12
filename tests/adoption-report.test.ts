@@ -73,7 +73,7 @@ describe("adoption report", () => {
 				status: "pass",
 				result: {
 					sessionId,
-					eventCount: 9,
+					eventCount: 11,
 					summary: {
 						status: "completed",
 						toolCalls: 1,

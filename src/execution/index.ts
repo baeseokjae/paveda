@@ -16,10 +16,10 @@ import type { HostSkillBundleTarget } from "../host-bundles/index.js";
 import { parseHostSkillBundleTarget } from "../host-bundles/index.js";
 import { type ProjectionStatusResult, checkProjectionStatus } from "../projection/index.js";
 import {
-	evaluateScoreMetric,
 	type GateSummary,
 	type ScoreMetricDefinition,
 	type ScoreThreshold,
+	evaluateScoreMetric,
 } from "../score-evaluator/index.js";
 import {
 	type ArtifactRecord,
@@ -201,6 +201,7 @@ export interface VerifyRunOptions {
 	runId: string;
 	profile?: PavedaProfile | string;
 	stage?: VerificationStage | string;
+	task?: string;
 	write?: boolean;
 	dbPath?: string;
 	storeScope?: StoreScope;
@@ -222,7 +223,7 @@ export interface VerifyRunResult {
 	policyViolations: PolicyViolationRecord[];
 }
 
-export type VerificationStage = "mechanical" | "semantic" | "consensus";
+export type VerificationStage = "mechanical" | "semantic" | "consensus" | "review";
 
 export interface VerificationStageResult {
 	stage: VerificationStage;
@@ -838,7 +839,11 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 		}
 		const taskType = parseTaskType(readTaskType(run));
 		const riskSurfaces = classifyRunRiskSurfaces(run);
-		const evidence = store.listEvidence(run.runId);
+		const evidence = options.task
+			? store
+					.listEvidence(run.runId)
+					.filter((item) => evidenceMatchesTask(item, options.task ?? ""))
+			: store.listEvidence(run.runId);
 		const artifacts = store.listArtifacts(run.runId);
 		const hostEvents = store.listHostEvents(run.runId);
 		const decisions = store.listDecisions(run.runId);
@@ -850,7 +855,7 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 		const hostCapabilities = (hostInfo?.capabilities ?? []) as HostCapabilityEntry[];
 		const stageFilter = parseOptionalVerificationStage(options.stage);
 		const gates = [
-			...verifySpecBinding({ cwd, profile, run, taskType }),
+			...verifySpecBinding({ cwd, profile, run, taskType, store }),
 			...verifyStagnation({ profile, stagnation }),
 			...requiredGatesForTask(manifest, taskType, riskSurfaces).map((gate) =>
 				verifyGate(gate, {
@@ -915,6 +920,27 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 			priorPolicyViolations: store.listPolicyViolations(run.runId),
 		}).filter((stage) => (stageFilter ? stage.stage === stageFilter : true));
 		if (options.write) {
+			for (const stage of stages.filter((item) => item.stage === "review")) {
+				store.append({
+					sessionId: run.runId,
+					ts: now,
+					type: "review.stage",
+					payload: stage,
+				});
+				store.append({
+					sessionId: run.runId,
+					ts: now,
+					type: "review.severity",
+					payload: {
+						stage: stage.stage,
+						severity:
+							stage.result === "block" ? "high" : stage.result === "pass" ? "none" : "medium",
+						result: stage.result,
+						score: stage.score,
+					},
+				});
+			}
+
 			store.recordDecision({
 				runId: run.runId,
 				decisionType: "risk.surface",
@@ -952,8 +978,7 @@ export function verifyRun(options: VerifyRunOptions): VerifyRunResult {
 		const phaseCount = new Set(phaseEvents.map((pe) => pe.phaseId)).size;
 		const phaseCompletionRatio =
 			phaseCount > 0
-				? phaseEvents.filter((pe) => pe.status === "completed").length /
-					phaseEvents.length
+				? phaseEvents.filter((pe) => pe.status === "completed").length / phaseEvents.length
 				: 0;
 		const scoreContext = {
 			evidence,
@@ -1087,6 +1112,7 @@ function verifySpecBinding(input: {
 	profile: PavedaProfile;
 	run: RunRecord;
 	taskType: PavedaTaskType;
+	store?: EventStore;
 }): VerifyGateResult[] {
 	if (!isCodeChangingTask(input.taskType)) {
 		return [];
@@ -1135,15 +1161,20 @@ function verifySpecBinding(input: {
 		binding.ambiguityScore !== undefined &&
 		binding.ambiguityScore > ambiguityThreshold
 	) {
-		return [
-			specBindingGate({
-				policyId: "workflow.spec-binding.ambiguous",
-				status: "block",
-				message: `ambiguity score ${binding.ambiguityScore} exceeds ${input.profile} threshold ${ambiguityThreshold}`,
-				recovery:
-					"Clarify the spec with /specify and start a new run with the lower ambiguity score.",
-			}),
-		];
+		const effectiveThreshold = input.store
+			? ontologyBoostedAmbiguityThreshold(input.store, input.run.runId, ambiguityThreshold)
+			: ambiguityThreshold;
+		if (binding.ambiguityScore > effectiveThreshold) {
+			return [
+				specBindingGate({
+					policyId: "workflow.spec-binding.ambiguous",
+					status: "block",
+					message: `ambiguity score ${binding.ambiguityScore} exceeds ${input.profile} threshold ${effectiveThreshold}`,
+					recovery:
+						"Clarify the spec with /specify and start a new run with the lower ambiguity score.",
+				}),
+			];
+		}
 	}
 	return [
 		specBindingGate({
@@ -1554,9 +1585,10 @@ function verifyGate(gate: RequiredGate, context: VerifyGateContext): VerifyGateR
 			(cap) => cap.id === capability && cap.support === "unsupported",
 		);
 		if (isUnsupported) {
-			const behavior = typeof gate.missingCapabilityBehavior === "string"
-				? gate.missingCapabilityBehavior
-				: "block";
+			const behavior =
+				typeof gate.missingCapabilityBehavior === "string"
+					? gate.missingCapabilityBehavior
+					: "block";
 			return {
 				id: String(gate.id),
 				phase: String(gate.phase),
@@ -1564,9 +1596,13 @@ function verifyGate(gate: RequiredGate, context: VerifyGateContext): VerifyGateR
 				status: "block",
 				message: `Required capability ${capability} is not supported by host.`,
 				evidenceIds: [],
-				recovery: behavior === "ask_setup_sprint"
-					? { action: "ask_setup_sprint", message: `Host does not support ${capability}. Run a setup sprint to add it.` }
-					: buildGateRecovery(gate),
+				recovery:
+					behavior === "ask_setup_sprint"
+						? {
+								action: "ask_setup_sprint",
+								message: `Host does not support ${capability}. Run a setup sprint to add it.`,
+							}
+						: buildGateRecovery(gate),
 			};
 		}
 	}
@@ -1884,7 +1920,7 @@ function buildVerificationStages(input: {
 	riskSurfaces: readonly RiskSurface[];
 	manifest: ProfileManifest;
 }): VerificationStageResult[] {
-	const stageFacts = (["mechanical", "semantic", "consensus"] as const).map((stage) =>
+	const stageFacts = (["mechanical", "semantic", "review", "consensus"] as const).map((stage) =>
 		buildVerificationStageFacts(stage, input.gates, input.evidence),
 	);
 	const consensusRequired = consensusRequiredForRun({
@@ -1897,7 +1933,7 @@ function buildVerificationStages(input: {
 		manifest: input.manifest,
 		stageFacts,
 	});
-	return (["mechanical", "semantic", "consensus"] as const).map((stage) => {
+	return (["mechanical", "semantic", "review", "consensus"] as const).map((stage) => {
 		const facts = stageFacts.find((item) => item.stage === stage);
 		if (!facts) {
 			throw new Error(`Missing verification stage facts: ${stage}`);
@@ -1907,7 +1943,7 @@ function buildVerificationStages(input: {
 		const result: EvidenceResult =
 			facts.blockingGates.length > 0
 				? "block"
-				: required || facts.stageGates.length > 0
+				: required || facts.stageGates.length > 0 || facts.stageEvidence.length > 0
 					? "pass"
 					: "not_applicable";
 		const blockingPolicyViolationIds = input.policyViolations
@@ -1973,6 +2009,13 @@ function buildVerificationStageFacts(
 }
 
 function gateStage(evidenceKind: string): VerificationStage {
+	if (
+		evidenceKind === "spec_compliance_review" ||
+		evidenceKind === "code_quality_review" ||
+		evidenceKind === "review_stage"
+	) {
+		return "review";
+	}
 	if (
 		evidenceKind === "semantic_review" ||
 		evidenceKind === "acceptance_review" ||
@@ -2113,7 +2156,9 @@ function hasRepeatedDistinctVerificationFailures(
 }
 
 function stageTriggeredBy(stage: VerificationStage): string[] {
-	return stage === "mechanical" ? ["verification:deterministic"] : ["verification:semantic"];
+	if (stage === "mechanical") return ["verification:deterministic"];
+	if (stage === "review") return ["verification:two-stage-review"];
+	return ["verification:semantic"];
 }
 
 function stageNextCommand(
@@ -2309,6 +2354,17 @@ function isReleaseArtifact(artifact: ArtifactRecord): boolean {
 	);
 }
 
+function evidenceMatchesTask(evidence: EvidenceRecord, task: string): boolean {
+	const metadata = asRecord(evidence.metadata);
+	return (
+		metadata?.task === task ||
+		metadata?.taskId === task ||
+		metadata?.task_id === task ||
+		evidence.evidenceId === task ||
+		evidence.evidenceId.startsWith(`${task}:`)
+	);
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : null;
 }
@@ -2359,6 +2415,28 @@ function ambiguityThresholdForProfile(profile: PavedaProfile): number | null {
 		return 0.5;
 	}
 	return null;
+}
+
+export function ontologyBoostedAmbiguityThreshold(
+	store: EventStore,
+	runId: string,
+	baseThreshold: number,
+): number {
+	const convergences = store
+		.replay(runId)
+		.filter((event) => event.type === "spec.ontology.convergence");
+	if (convergences.length === 0) {
+		return baseThreshold;
+	}
+	const latestEvent = convergences[convergences.length - 1];
+	const status = latestEvent && (latestEvent.payload as Record<string, unknown>)?.status;
+	if (status === "converged") {
+		return baseThreshold * 2;
+	}
+	if (status === "stagnating") {
+		return baseThreshold * 1.3;
+	}
+	return baseThreshold;
 }
 
 function sha256(value: string | Buffer): string {
@@ -2418,7 +2496,12 @@ function parseOptionalVerificationStage(value: string | undefined): Verification
 	if (value === undefined) {
 		return undefined;
 	}
-	if (value === "mechanical" || value === "semantic" || value === "consensus") {
+	if (
+		value === "mechanical" ||
+		value === "semantic" ||
+		value === "consensus" ||
+		value === "review"
+	) {
 		return value;
 	}
 	throw new Error(`Invalid verification stage: ${value}`);
@@ -2467,9 +2550,14 @@ function asScoreMetricDefinition(value: unknown): ScoreMetricDefinition | null {
 	const def = value as Record<string, unknown>;
 	if (typeof def.id !== "string") return null;
 	if (typeof def.direction !== "string") return null;
-	if (!def.range || typeof (def.range as Record<string, unknown>).min !== "number" ||
-		typeof (def.range as Record<string, unknown>).max !== "number") return null;
-	if (!def.calculation || typeof (def.calculation as Record<string, unknown>).kind !== "string") return null;
+	if (
+		!def.range ||
+		typeof (def.range as Record<string, unknown>).min !== "number" ||
+		typeof (def.range as Record<string, unknown>).max !== "number"
+	)
+		return null;
+	if (!def.calculation || typeof (def.calculation as Record<string, unknown>).kind !== "string")
+		return null;
 	const kind = (def.calculation as Record<string, unknown>).kind as string;
 	if (
 		kind !== "evidence_ratio" &&
@@ -2478,7 +2566,8 @@ function asScoreMetricDefinition(value: unknown): ScoreMetricDefinition | null {
 		kind !== "risk_rule" &&
 		kind !== "manual_review" &&
 		kind !== "direct_gate_result"
-	) return null;
+	)
+		return null;
 	return def as unknown as ScoreMetricDefinition;
 }
 

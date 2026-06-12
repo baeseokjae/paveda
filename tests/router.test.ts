@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { recordRouteDecision, routeSkill } from "../src/router/index.js";
+import { recordInterviewConverged, recordInterviewRound } from "../src/spec/interview.js";
 import { EventStore, type RouterDecision } from "../src/store/index.js";
 
 const tempDirs: string[] = [];
@@ -61,6 +62,85 @@ describe("PAL router", () => {
 			tier: "frontier",
 			reason: "escalate:verify-failure,ambiguity,elapsed-time",
 		});
+	});
+
+	it("pre-escalates from active high-confidence instincts", () => {
+		expect(
+			routeSkill({
+				activeInstincts: [
+					{
+						id: 7,
+						scope: "project",
+						pattern: "router:do:auth → requires_standard",
+						evidence: "session-1",
+						examples: { outcome: "requires_standard" },
+						confidence: 0.9,
+						ttlExpiresAt: null,
+						status: "active",
+					},
+				],
+			}),
+		).toMatchObject({
+			tier: "standard",
+			reason: "instinct:requires_standard:7",
+		});
+	});
+
+	it("routes interview mode without ambiguity blocking", () => {
+		expect(
+			routeSkill({
+				mode: "interview",
+				maxRounds: 15,
+				ambiguityRequired: 0.2,
+				signals: { ambiguityScore: 0.21 },
+			}),
+		).toMatchObject({
+			enabled: true,
+			blocked: false,
+			mode: "interview",
+			maxRounds: 15,
+			reason: "interview:enabled",
+		});
+	});
+
+	it("records Socratic interview round and convergence events", () => {
+		const store = openTempStore();
+		recordInterviewRound(store, {
+			sessionId: "spec-session",
+			round: 1,
+			question: "What does urgent mean?",
+			answer: "Within 24 hours.",
+			dimension: "constraint_clarity",
+			ambiguityAfter: 0.31,
+			ts: 100,
+		});
+		recordInterviewConverged(store, {
+			sessionId: "spec-session",
+			totalRounds: 2,
+			finalAmbiguity: 0.15,
+			dimensions: { goal_clarity: 0.9, constraint_clarity: 0.85 },
+			qaHistory: [{ q: "What does urgent mean?", a: "Within 24 hours." }],
+			ts: 200,
+		});
+
+		expect(store.replay("spec-session")).toMatchObject([
+			{
+				type: "spec.interview.round",
+				payload: {
+					round: 1,
+					dimension: "constraint_clarity",
+					ambiguity_after: 0.31,
+				},
+			},
+			{
+				type: "spec.interview.converged",
+				payload: {
+					total_rounds: 2,
+					final_ambiguity: 0.15,
+				},
+			},
+		]);
+		store.close();
 	});
 
 	it("blocks /do when ambiguity exceeds the selected skill threshold", () => {

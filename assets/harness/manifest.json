@@ -95,6 +95,12 @@
 			"path": "skills/dead-code",
 			"optional": true,
 			"notes": "Portable unused-code and unused-dependency investigation workflow."
+		},
+		{
+			"name": "unstuck",
+			"path": "skills/optional/unstuck",
+			"optional": true,
+			"notes": "Five lateral-thinking personas for getting unstuck without changing core policy runtime."
 		}
 	]
 }

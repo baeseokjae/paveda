@@ -39,6 +39,8 @@ description: |
   위험을 먼저 보고한다.
 argument-hint: "[--quick]"
 allowed-tools: Bash, Read, Write, Agent
+allowed-providers: claude-sonnet, gpt-4o
+prefer-provider: gpt-4o
 disable-model-invocation: false
 router: enabled
 trigger:
@@ -55,6 +57,8 @@ ambiguity-required: 0.2
 			description: "코드 검토를 수행한다.\n위험을 먼저 보고한다.",
 			argumentHint: "[--quick]",
 			allowedTools: ["Bash", "Read", "Write", "Agent"],
+			allowedProviders: ["claude-sonnet", "gpt-4o"],
+			preferProvider: "gpt-4o",
 			disableModelInvocation: false,
 			router: "enabled",
 			trigger: {

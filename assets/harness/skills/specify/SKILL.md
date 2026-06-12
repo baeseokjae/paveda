@@ -3,6 +3,13 @@ name: specify
 description: "Feature specification skill. Runs a structured Socratic interview to crystallize vague feature ideas into Product Specs. Use when writing specs, requirements, or feature definitions. --quick mode for rapid PM context (used by /do). --discover adds PM opportunity analysis."
 argument-hint: "[--quick] [--discover] <feature description>"
 model: standard
+modes:
+  - evaluate
+  - interview
+  - greenfield
+  - brownfield
+trigger:
+  keywords: [specify, spec, define, clarify, interview]
 allowed-tools: Read, Write, Edit, Glob, Grep, Bash, AskUserQuestion, Skill, Agent
 ---
 

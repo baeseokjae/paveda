@@ -6,7 +6,12 @@ import type {
 } from "../core/index.js";
 import { loadConfig } from "../core/index.js";
 import { type BlastCheckResult, evaluateBlastCheck } from "../hooks/blast-check.js";
-import { type CostGuardResult, evaluateCostGuard } from "../hooks/cost-guard.js";
+import { type CompletionGateResult, evaluateCompletionGate } from "../hooks/completion-gate.js";
+import {
+	type CostGuardResult,
+	buildSessionCostSummary,
+	evaluateCostGuard,
+} from "../hooks/cost-guard.js";
 import {
 	type DestructiveGuardResult,
 	evaluateDestructiveGuard,
@@ -71,6 +76,7 @@ export interface DispatchHookEventResult {
 	toolingEnforce?: ToolingEnforceResult;
 	testProcessCleanup?: TestProcessCleanupResult;
 	projectHooks?: ProjectHooksResult;
+	completionGate?: CompletionGateResult;
 	agentEvent?: AgentEvent;
 	workflowState?: WorkflowState;
 	policySource?: PolicyRuntimeSource;
@@ -205,10 +211,27 @@ export function dispatchHookEvent(
 		input.lifecycle === "session.created"
 			? (collectSessionContext({ cwd: extractPayloadCwd(input.payload), config }) ?? undefined)
 			: undefined;
-	const payload =
+	let completionGate: CompletionGateResult | undefined;
+	const basePayload =
 		sessionContext && isRecord(input.payload)
 			? { ...input.payload, sessionContext }
 			: (input.payload ?? {});
+	if (input.lifecycle === "session.completed") {
+		completionGate = evaluateCompletionGate({
+			store,
+			sessionId: input.sessionId,
+			profile: config.hookProfile,
+			payload: basePayload,
+		});
+	}
+	const payload =
+		completionGate && isRecord(basePayload)
+			? {
+					...basePayload,
+					verification_passed: completionGate.verificationPassed,
+					completion_gate_action: completionGate.action,
+				}
+			: basePayload;
 	const events: EventRecord[] = [];
 	const agentEvent = normalizeAgentEvent({
 		sessionId: input.sessionId,
@@ -280,13 +303,53 @@ export function dispatchHookEvent(
 				payload: extractAgentSpawnPayload(input.payload),
 			}),
 		);
-		costGuard = evaluateCostGuard(store, { sessionId: input.sessionId, ts, config });
+		costGuard = evaluateCostGuard(store, {
+			sessionId: input.sessionId,
+			ts,
+			config,
+			payload: extractToolPayload(input.payload),
+		});
 		events.push(
 			store.append({
 				sessionId: input.sessionId,
 				ts,
 				type: "cost.guard.evaluated",
 				payload: costGuard,
+			}),
+		);
+	}
+
+	if (input.lifecycle === "session.completed") {
+		if (completionGate) {
+			events.push(
+				store.append({
+					sessionId: input.sessionId,
+					ts,
+					type: "session.completion_gate",
+					payload: completionGate,
+				}),
+			);
+		}
+		const summary = buildSessionCostSummary(store, {
+			sessionId: input.sessionId,
+			ts,
+			config,
+			payload,
+		});
+		events.push(
+			store.append({
+				sessionId: input.sessionId,
+				ts,
+				type: "session.cost.summary",
+				payload: {
+					total_cost_usd: summary.accumulatedCost,
+					total_tokens: summary.accumulatedTokens,
+					tool_calls: summary.toolCalls,
+					agent_spawns: summary.agentSpawns,
+					duration_minutes: summary.elapsedMinutes,
+					warnings: summary.warnings,
+					exceeded: summary.exceeded,
+				},
 			}),
 		);
 	}
@@ -390,6 +453,7 @@ export function dispatchHookEvent(
 		toolingEnforce,
 		testProcessCleanup,
 		projectHooks,
+		completionGate,
 		agentEvent,
 		workflowState,
 		policySource,

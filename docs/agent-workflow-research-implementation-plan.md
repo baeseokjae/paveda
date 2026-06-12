@@ -5,7 +5,7 @@ Date: 2026-06-10
 
 ## Summary
 
-This document turns the research on Superpowers, Ouroboros, and Ruflo into a
+This document turns the research on Superpowers, the spec-first workflow system, and Ruflo into a
 Paveda implementation plan.
 
 The goal is not to copy their product surfaces. Paveda should stay a portable
@@ -14,12 +14,12 @@ The useful ideas from these projects should be translated into Paveda-native
 capabilities: spec-bound runs, staged verification, skill evals, stagnation
 policy, setup UX, permissioned packs, and progress reporting.
 
-## Source Projects
+## Reference Systems
 
 | Project | Primary concept | Useful signal for Paveda |
 | --- | --- | --- |
 | [Superpowers](https://github.com/obra/superpowers) | Agentic software development methodology built from composable skills | Strong workflow UX, TDD discipline, process-skill testing, subagent review gates |
-| [Ouroboros](https://github.com/Q00/ouroboros) | Specification-first Agent OS for replayable AI coding workflows | Seed/spec contract, ambiguity gate, staged evaluation, event-sourced execution, stagnation recovery |
+| Spec-first workflow system | Specification-first Agent OS for replayable AI coding workflows | Seed/spec contract, ambiguity gate, staged evaluation, event-sourced execution, stagnation recovery |
 | [Ruflo](https://github.com/ruvnet/ruflo) | Multi-agent AI harness for Claude Code and Codex | Setup UX, plugin ecosystem, background workers, memory/learning, dashboard and verification surfaces |
 
 ## Current Paveda Fit
@@ -169,7 +169,7 @@ Add policy decisions:
 ### Problem
 
 Paveda has verification gates and evidence providers, but the user-facing model is
-still a single verification action. Ouroboros's staged model is useful because it
+still a single verification action. The staged model is useful because it
 separates cheap deterministic checks from semantic judgment and expensive
 multi-model consensus.
 
@@ -399,8 +399,8 @@ should emit the recovery requirement.
 ### Problem
 
 Paveda has `init`, host installers, `doctor`, `runtime-smoke`, and
-`adoption-report`, but a new user must know which command to run first. Ruflo and
-Ouroboros both provide stronger one-command onboarding.
+`adoption-report`, but a new user must know which command to run first. Similar
+systems provide stronger one-command onboarding.
 
 ### Goal
 

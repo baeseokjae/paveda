@@ -1,9 +1,11 @@
 import type {
+	InstinctRecord,
 	RoutedSkill,
 	RouterDecision,
 	RouterDecisionResult,
 	RouterTier,
 } from "../store/index.js";
+import { selectProvider } from "./providers.js";
 
 export interface RouterSignals {
 	toolRetries?: number;
@@ -12,21 +14,34 @@ export interface RouterSignals {
 	elapsedMinutes?: number;
 }
 
+export type RouteMode = "evaluate" | "interview" | "greenfield" | "brownfield";
+
 export interface RouteSkillInput {
 	skill?: string;
 	routerEnabled?: boolean;
+	mode?: RouteMode;
+	maxRounds?: number;
 	ambiguityRequired?: number;
 	history?: readonly RouterDecision[];
 	signals?: RouterSignals;
+	preferredProvider?: string;
+	allowedProviders?: readonly string[];
+	failedProvider?: string;
+	activeInstincts?: readonly InstinctRecord[];
 }
 
 export interface RouteSkillDecision {
 	enabled: boolean;
 	blocked: boolean;
 	skill: string;
+	mode: RouteMode;
+	maxRounds?: number;
 	tier: RouterTier;
 	reason: string;
 	ambiguityRequired?: number;
+	provider: string;
+	availableProviders: string[];
+	providerReason: string;
 }
 
 export interface RecordRouteDecisionInput extends RouteSkillInput {
@@ -40,23 +55,26 @@ const TIER_ORDER: readonly RouterTier[] = ["frugal", "standard", "frontier"];
 
 export function routeSkill(input: RouteSkillInput = {}): RouteSkillDecision {
 	const skill = input.skill ?? ROUTED_SKILL;
+	const mode = input.mode ?? "evaluate";
 	if (skill !== ROUTED_SKILL) {
-		return {
+		return withProvider(input, {
 			enabled: false,
 			blocked: false,
 			skill,
+			mode,
 			tier: "standard",
 			reason: "disabled:skill",
-		};
+		});
 	}
 	if (input.routerEnabled === false) {
-		return {
+		return withProvider(input, {
 			enabled: false,
 			blocked: false,
 			skill,
+			mode,
 			tier: "standard",
 			reason: "disabled:skill-router",
-		};
+		});
 	}
 
 	const history = (input.history ?? []).filter((decision) => decision.skill === skill);
@@ -65,38 +83,73 @@ export function routeSkill(input: RouteSkillInput = {}): RouteSkillDecision {
 	if (
 		ambiguityScore !== undefined &&
 		ambiguityRequired !== undefined &&
-		ambiguityScore > ambiguityRequired
+		ambiguityScore > ambiguityRequired &&
+		mode !== "interview"
 	) {
-		return {
+		return withProvider(input, {
 			enabled: true,
 			blocked: true,
 			skill,
+			mode,
 			tier: chooseBaseTier(history).tier,
 			reason: "blocked:ambiguity",
 			ambiguityRequired,
-		};
+		});
 	}
 
 	const base = chooseBaseTier(history);
-	const escalationReasons = collectEscalationReasons(input.signals ?? {});
-	if (escalationReasons.length > 0) {
-		return {
+	const instinctTier = preEscalationTierFromInstincts(skill, input.activeInstincts ?? []);
+	if (instinctTier) {
+		return withProvider(input, {
 			enabled: true,
 			blocked: false,
 			skill,
+			mode,
+			tier: maxTier(base.tier, instinctTier.tier),
+			reason: `instinct:${instinctTier.reason}`,
+			ambiguityRequired,
+		});
+	}
+	const escalationReasons = collectEscalationReasons(input.signals ?? {});
+	if (escalationReasons.length > 0) {
+		return withProvider(input, {
+			enabled: true,
+			blocked: false,
+			skill,
+			mode,
 			tier: upgradeTier(base.tier),
 			reason: `escalate:${escalationReasons.join(",")}`,
 			ambiguityRequired,
-		};
+		});
 	}
 
-	return {
+	return withProvider(input, {
 		enabled: true,
 		blocked: false,
 		skill,
+		mode,
 		tier: base.tier,
-		reason: base.reason,
+		reason: mode === "interview" ? "interview:enabled" : base.reason,
 		ambiguityRequired,
+	});
+}
+
+function withProvider(
+	input: RouteSkillInput,
+	decision: Omit<RouteSkillDecision, "provider" | "availableProviders" | "providerReason">,
+): RouteSkillDecision {
+	const provider = selectProvider({
+		tier: decision.tier,
+		preferredProvider: input.preferredProvider,
+		allowedProviders: input.allowedProviders,
+		failedProvider: input.failedProvider,
+	});
+	return {
+		...decision,
+		...(input.maxRounds !== undefined ? { maxRounds: input.maxRounds } : {}),
+		provider: provider.provider,
+		availableProviders: provider.availableProviders,
+		providerReason: provider.reason,
 	};
 }
 
@@ -185,4 +238,42 @@ function collectEscalationReasons(signals: RouterSignals): string[] {
 	}
 
 	return reasons;
+}
+
+function preEscalationTierFromInstincts(
+	skill: string,
+	instincts: readonly InstinctRecord[],
+): { tier: RouterTier; reason: string } | null {
+	const match = instincts
+		.filter((instinct) => instinct.status === "active" || instinct.status === "promoted")
+		.filter((instinct) => instinct.confidence >= 0.8)
+		.find((instinct) => instinctAppliesToSkill(instinct, skill));
+	if (!match) {
+		return null;
+	}
+	const normalized = `${match.pattern} ${JSON.stringify(match.examples ?? {})}`.toLowerCase();
+	if (normalized.includes("requires_frontier")) {
+		return { tier: "frontier", reason: `requires_frontier:${match.id}` };
+	}
+	if (
+		normalized.includes("requires_standard") ||
+		normalized.includes("requires_escalation") ||
+		normalized.includes("requires_escalation_review")
+	) {
+		return { tier: "standard", reason: `requires_standard:${match.id}` };
+	}
+	return null;
+}
+
+function instinctAppliesToSkill(instinct: InstinctRecord, skill: string): boolean {
+	const haystack = `${instinct.pattern} ${JSON.stringify(instinct.examples ?? {})}`.toLowerCase();
+	return (
+		haystack.includes(`router:${skill}:`) || haystack.includes(`skill:${skill}`) || skill === "do"
+	);
+}
+
+function maxTier(left: RouterTier, right: RouterTier): RouterTier {
+	const leftIndex = TIER_ORDER.indexOf(left);
+	const rightIndex = TIER_ORDER.indexOf(right);
+	return TIER_ORDER[Math.max(leftIndex, rightIndex)] ?? right;
 }

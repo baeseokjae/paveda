@@ -101,6 +101,35 @@ Host bundle installer는 별도 레이어로 `harness`, `claude-code`, `codex`, 
 
 ## 5. SQLite EventStore
 
+### 5.1 Phase 3 events
+
+Phase 3 (optional skills, v0.4+) 추가 EventStore 이벤트:
+
+| 이벤트 | 출처 | payload |
+|---|---|---|
+| `review.stage` | `verifyRun({ stage: "review", write: true })` | stage result, score, blocked policy violations |
+| `review.severity` | 위와 동시 기록 | stage, severity (none/medium/high), score |
+| `session.completion_gate` | `harness.session.complete` hook dispatch | verificationPassed, action (off/warn/block), runId |
+| `worker.run` | `paveda worker run` | name, task (doctor/adoption-report/security-scan), ok, output |
+| `instinct.lifecycle_maintained` | `maintainInstinctLifecycle()` | expired/demoted/reopened instinct IDs |
+| `plan.generated` | `recordGeneratedPlan()` | tasks, dependency graph, total estimated minutes |
+| `spec.interview.round` | `recordInterviewRound()` | round, question, answer, dimension, ambiguity_after |
+| `spec.interview.converged` | `recordInterviewConverged()` | total_rounds, final_ambiguity, dimensions, qa_history |
+
+### 5.2 Cost tracking
+
+Cost guard tracks USD **and tokens** through `session.cost.summary` events in the EventStore.
+SessionSummary (status CLI table) exposes `costUsd`, `toolCalls`, `agentSpawns` but not
+tokens directly — token data can be read via `paveda events --session <id>` and filtering
+for `session.cost.summary` events.
+
+### 5.3 Semantic search
+
+`paveda search --semantic --query <text> --limit <n> --since <ts>` provides
+deterministic token-vector cosine similarity search over the EventStore. This is
+a zero-dependency fallback. An embedding-backed vector search provider is
+deferred to a future release.
+
 ```sql
 CREATE TABLE events (
   id INTEGER PRIMARY KEY,
@@ -267,3 +296,15 @@ host bundle rendering cannot silently remove required workflow language.
 ## 11. 관련 문서
 
 - 전체 spec: [`docs/spec.md`](./spec.md)
+## 6. CLI command group reference
+
+Phase 3 CLI 명령군:
+
+- `paveda worker schedule/list/run/logs` — background task execution (doctor, adoption-report, security-scan)
+- `paveda verify --run <id> --stage review` — two-stage code review verification
+- `paveda skills install unstuck --write` — install optional unstuck portable skill
+- `paveda search --semantic --query <text> --limit <n> --since <ts>` — deterministic semantic search
+- `paveda route --skill do --mode interview --max-rounds <n> --prefer-provider <p> --allowed-providers <a,b>` — PAL Router with interview mode and provider constraints
+- `paveda instincts list/add/set-status/auto-extract` — instinct lifecycle management
+- `paveda learning list/propose/promote/retire/explain` — learning pattern management
+- `paveda contract diff-source --run <id>` — weighted contract drift measurement

@@ -20,6 +20,8 @@ export interface PavedaConfig {
 	sessionStartContext: boolean;
 	sessionStartMaxChars: number;
 	costGuardMaxMinutes: number;
+	costGuardMaxUsd: number;
+	costGuardMaxTokens: number;
 	costGuardAgentWarningThreshold: number;
 	costGuardAgentCompactInterval: number;
 	policyCachePath?: string;
@@ -34,9 +36,13 @@ export interface DisabledHookSelector {
 export const DEFAULT_HOOK_PROFILE: HookProfile = "standard";
 export const DEFAULT_SESSION_START_MAX_CHARS = 8000;
 export const DEFAULT_COST_GUARD_MAX_MINUTES = 120;
+export const DEFAULT_COST_GUARD_MAX_USD = 5;
+export const DEFAULT_COST_GUARD_MAX_TOKENS = 1_000_000;
 export const DEFAULT_COST_GUARD_AGENT_WARNING_THRESHOLD = 5;
 export const DEFAULT_COST_GUARD_AGENT_COMPACT_INTERVAL = 3;
 export const STRICT_COST_GUARD_MAX_MINUTES = 60;
+export const STRICT_COST_GUARD_MAX_USD = 3;
+export const STRICT_COST_GUARD_MAX_TOKENS = 1_000_000;
 export const STRICT_COST_GUARD_AGENT_WARNING_THRESHOLD = 3;
 export const STRICT_COST_GUARD_AGENT_COMPACT_INTERVAL = 2;
 
@@ -59,6 +65,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): PavedaConfig {
 			costGuardDefaults.maxMinutes,
 			"PAVEDA_COST_GUARD_MAX_MINUTES",
 		),
+		costGuardMaxUsd: parsePositiveNumber(
+			env.PAVEDA_COST_GUARD_MAX_USD,
+			costGuardDefaults.maxUsd,
+			"PAVEDA_COST_GUARD_MAX_USD",
+		),
+		costGuardMaxTokens: parsePositiveInteger(
+			env.PAVEDA_COST_GUARD_MAX_TOKENS,
+			costGuardDefaults.maxTokens,
+			"PAVEDA_COST_GUARD_MAX_TOKENS",
+		),
 		costGuardAgentWarningThreshold: parsePositiveInteger(
 			env.PAVEDA_COST_GUARD_AGENT_WARNING_THRESHOLD,
 			costGuardDefaults.agentWarningThreshold,
@@ -75,12 +91,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): PavedaConfig {
 
 function costGuardDefaultsForProfile(profile: HookProfile): {
 	maxMinutes: number;
+	maxUsd: number;
+	maxTokens: number;
 	agentWarningThreshold: number;
 	agentCompactInterval: number;
 } {
 	if (profile === "strict") {
 		return {
 			maxMinutes: STRICT_COST_GUARD_MAX_MINUTES,
+			maxUsd: STRICT_COST_GUARD_MAX_USD,
+			maxTokens: STRICT_COST_GUARD_MAX_TOKENS,
 			agentWarningThreshold: STRICT_COST_GUARD_AGENT_WARNING_THRESHOLD,
 			agentCompactInterval: STRICT_COST_GUARD_AGENT_COMPACT_INTERVAL,
 		};
@@ -88,6 +108,8 @@ function costGuardDefaultsForProfile(profile: HookProfile): {
 
 	return {
 		maxMinutes: DEFAULT_COST_GUARD_MAX_MINUTES,
+		maxUsd: DEFAULT_COST_GUARD_MAX_USD,
+		maxTokens: DEFAULT_COST_GUARD_MAX_TOKENS,
 		agentWarningThreshold: DEFAULT_COST_GUARD_AGENT_WARNING_THRESHOLD,
 		agentCompactInterval: DEFAULT_COST_GUARD_AGENT_COMPACT_INTERVAL,
 	};
@@ -170,6 +192,23 @@ function parsePositiveInteger(
 
 	const parsed = Number(value);
 	if (!Number.isInteger(parsed) || parsed <= 0) {
+		throw new Error(`Invalid ${name}: ${value}`);
+	}
+
+	return parsed;
+}
+
+function parsePositiveNumber(
+	value: string | undefined,
+	defaultValue: number,
+	name: string,
+): number {
+	if (!value) {
+		return defaultValue;
+	}
+
+	const parsed = Number(value);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
 		throw new Error(`Invalid ${name}: ${value}`);
 	}
 

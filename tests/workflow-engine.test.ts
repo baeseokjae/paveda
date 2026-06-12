@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+	type PhaseGraph,
+	getMaxAttempts,
+	getNextPhases,
+	getPhaseEvidence,
 	getPhaseGraph,
 	getPhaseOrder,
-	getNextPhases,
 	getRepairTarget,
-	getMaxAttempts,
-	getPhaseEvidence,
-	type PhaseGraph,
 } from "../src/workflow/engine.js";
 
 describe("workflow engine", () => {
@@ -26,9 +26,7 @@ describe("workflow engine", () => {
 
 		it("repair edges connect semantic-adversarial-verification to repair", () => {
 			const graph = getPhaseGraph(process.cwd());
-			const repairEdge = graph.edges.find(
-				(e) => e.type === "repair",
-			);
+			const repairEdge = graph.edges.find((e) => e.type === "repair");
 			expect(repairEdge).toBeTruthy();
 			expect(repairEdge?.from).toBe("semantic-adversarial-verification");
 			expect(repairEdge?.to).toBe("repair");
@@ -60,12 +58,7 @@ describe("workflow engine", () => {
 
 		it("returns repair when source phase failed", () => {
 			const graph = getPhaseGraph(process.cwd());
-			const next = getNextPhases(
-				graph,
-				[],
-				["semantic-adversarial-verification"],
-				"strict",
-			);
+			const next = getNextPhases(graph, [], ["semantic-adversarial-verification"], "strict");
 			expect(next).toContain("repair");
 		});
 	});

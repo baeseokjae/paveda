@@ -42,6 +42,8 @@ describe("runtime smoke", () => {
 				"tooling.enforce.evaluated",
 				"hook.fired",
 				"session.completed",
+				"session.completion_gate",
+				"session.cost.summary",
 			],
 			summary: {
 				id: "runtime-smoke-session",
@@ -52,7 +54,7 @@ describe("runtime smoke", () => {
 		});
 
 		const store = new EventStore(dbPath);
-		expect(store.replay("runtime-smoke-session")).toHaveLength(9);
+		expect(store.replay("runtime-smoke-session")).toHaveLength(11);
 		store.close();
 	});
 

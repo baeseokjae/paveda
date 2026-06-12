@@ -18,6 +18,7 @@ describe("MCP gateway", () => {
 	it("lists Paveda MCP wrapper tools", () => {
 		expect(PAVEDA_MCP_TOOLS.map((tool) => tool.name)).toEqual([
 			"paveda.search",
+			"paveda.search_semantic",
 			"paveda.read",
 			"paveda.patch",
 			"paveda.shell",

@@ -4,6 +4,7 @@ import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv, { type AnySchema, type ValidateFunction } from "ajv";
 import { parseDocument } from "yaml";
+import { type DriftScore, measureDrift } from "../policy/drift.js";
 
 export type ContractCompileSeverity = "error" | "warning";
 export type ContractCompileOutputKind = "contract" | "profile" | "host";
@@ -48,6 +49,7 @@ export interface ContractDiffSourceEntry {
 	state: ContractDiffSourceState;
 	expectedSha256: string;
 	currentSha256: string | null;
+	drift: DriftScore;
 }
 
 export interface ContractDiffSourceResult {
@@ -56,6 +58,7 @@ export interface ContractDiffSourceResult {
 	ok: boolean;
 	compile: ContractCompileResult;
 	entries: ContractDiffSourceEntry[];
+	drift: DriftScore;
 }
 
 interface SourceDocument {
@@ -125,6 +128,10 @@ export function diffContractSource(options: ContractCompileOptions = {}): Contra
 				: currentSha256 === output.compiledSha256
 					? "clean"
 					: "drifted";
+		const current = existsSync(absoluteOutputPath)
+			? safeJsonParse(readFileSync(absoluteOutputPath, "utf8"))
+			: null;
+		const expected = safeJsonParse(readFileSync(join(compile.cwd, output.sourcePath), "utf8"));
 		return {
 			kind: output.kind,
 			sourcePath: output.sourcePath,
@@ -132,16 +139,44 @@ export function diffContractSource(options: ContractCompileOptions = {}): Contra
 			state,
 			expectedSha256: output.compiledSha256,
 			currentSha256,
+			drift: measureDrift(expected, current),
 		};
 	});
 
+	const drift = aggregateDrift(entries.map((entry) => entry.drift));
 	return {
 		cwd: compile.cwd,
 		sourceRoot: compile.sourceRoot,
 		ok: compile.ok && entries.every((entry) => entry.state === "clean"),
 		compile,
 		entries,
+		drift,
 	};
+}
+
+function aggregateDrift(scores: readonly DriftScore[]): DriftScore {
+	if (scores.length === 0) {
+		return { overall: 0, dimensions: { goal: 0, constraint: 0, ontology: 0 }, severity: "none" };
+	}
+	const overall = Math.max(...scores.map((score) => score.overall));
+	return {
+		overall,
+		dimensions: {
+			goal: Math.max(...scores.map((score) => score.dimensions.goal)),
+			constraint: Math.max(...scores.map((score) => score.dimensions.constraint)),
+			ontology: Math.max(...scores.map((score) => score.dimensions.ontology)),
+		},
+		severity:
+			[...scores].sort((left, right) => right.overall - left.overall)[0]?.severity ?? "none",
+	};
+}
+
+function safeJsonParse(raw: string): unknown {
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return raw;
+	}
 }
 
 function loadSourceDocuments(

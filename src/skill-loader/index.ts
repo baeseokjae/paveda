@@ -30,6 +30,8 @@ export interface SkillFrontmatter {
 	router?: string | boolean;
 	trigger?: SkillTrigger;
 	ambiguityRequired?: number;
+	allowedProviders?: string[];
+	preferProvider?: string;
 	[key: string]: unknown;
 }
 
@@ -59,6 +61,8 @@ export interface SkillStatusCandidate {
 	model?: string;
 	router?: string | boolean;
 	ambiguityRequired?: number;
+	allowedProviders?: string[];
+	preferProvider?: string;
 }
 
 export interface SkillStatusIssue {
@@ -857,6 +861,9 @@ export function parseFrontmatter(raw: string): SkillFrontmatter {
 
 	if (typeof result.allowedTools === "string") {
 		result.allowedTools = splitCommaList(result.allowedTools);
+	}
+	if (typeof result.allowedProviders === "string") {
+		result.allowedProviders = splitCommaList(result.allowedProviders);
 	}
 
 	return result as SkillFrontmatter;

@@ -20,6 +20,19 @@ Squash merge 환경에서 안전하게 PR을 생성한다.
 /pr --draft              # Draft PR 생성
 ```
 
+## Two-stage review gate
+
+PR 생성 전 반드시 2단계 리뷰를 수행한다.
+
+1. **Spec compliance review**
+   - 변경사항이 연결된 spec/acceptance criteria/run objective를 만족하는지 확인한다.
+   - 필요한 경우 `paveda verify --run <id> --stage review --write` 또는 evidence kind `spec_compliance_review`를 기록한다.
+2. **Code quality review**
+   - 테스트, 타입, lint, 보안/데이터 손상 위험, 불필요한 refactor를 확인한다.
+   - 필요한 경우 evidence kind `code_quality_review`를 기록한다.
+
+리뷰 결과는 Paveda EventStore에 `review.stage`와 `review.severity` 이벤트로 남아야 한다. `high` severity가 있으면 PR 생성 전에 수정하거나 사용자에게 명확히 보고한다.
+
 ## 실행 순서
 
 ### 1. 상태 확인 (병렬 실행)

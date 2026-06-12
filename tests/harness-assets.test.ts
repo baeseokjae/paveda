@@ -36,9 +36,9 @@ describe("harness assets", () => {
 		const manifest = JSON.parse(readFileSync(join(harnessRoot, "manifest.json"), "utf8")) as {
 			skills?: Array<{ name?: string; path?: string }>;
 		};
-		const packagedSkills = readdirSync(skillsRoot, { withFileTypes: true })
-			.filter((entry) => entry.isDirectory())
-			.map((entry) => entry.name)
+		const packagedSkills = discoverPackagedSkillFiles(skillsRoot)
+			.map((path) => parseSkillDocument(readFileSync(path, "utf8")).frontmatter.name)
+			.filter((name): name is string => typeof name === "string")
 			.sort();
 		const manifestSkills = (manifest.skills ?? [])
 			.map((skill) => skill.name)
@@ -47,7 +47,6 @@ describe("harness assets", () => {
 
 		expect(manifestSkills).toEqual(packagedSkills);
 		for (const skill of manifest.skills ?? []) {
-			expect(skill.path).toBe(skill.name ? `skills/${skill.name}` : undefined);
 			if (skill.name && skill.path) {
 				const raw = readFileSync(join(harnessRoot, skill.path, "SKILL.md"), "utf8");
 				expect(parseSkillDocument(raw).frontmatter.name).toBe(skill.name);
@@ -149,6 +148,16 @@ describe("harness assets", () => {
 		expect(violations).toEqual([]);
 	});
 });
+
+function discoverPackagedSkillFiles(root: string): string[] {
+	return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+		const path = join(root, entry.name);
+		if (entry.isDirectory()) {
+			return discoverPackagedSkillFiles(path);
+		}
+		return entry.isFile() && entry.name === "SKILL.md" ? [path] : [];
+	});
+}
 
 function scanTextFiles(root: string): string[] {
 	const paths: string[] = [];

@@ -1,5 +1,5 @@
-import type { EvidenceRecord, ScoreRecord } from "../store/index.js";
 import type { PavedaTaskType, RiskSurface } from "../execution/index.js";
+import type { EvidenceRecord, ScoreRecord } from "../store/index.js";
 
 export interface ScoreMetricDefinition {
 	id: string;
@@ -13,7 +13,13 @@ export interface ScoreMetricDefinition {
 }
 
 export interface ScoreCalculation {
-	kind: "evidence_ratio" | "threshold_check" | "weighted_inputs" | "risk_rule" | "manual_review" | "direct_gate_result";
+	kind:
+		| "evidence_ratio"
+		| "threshold_check"
+		| "weighted_inputs"
+		| "risk_rule"
+		| "manual_review"
+		| "direct_gate_result";
 	weights?: Record<string, number>;
 }
 
@@ -96,10 +102,7 @@ export function evaluateScoreMetric(
 	};
 }
 
-function computeEvidenceRatio(
-	definition: ScoreMetricDefinition,
-	context: ScoreContext,
-): number {
+function computeEvidenceRatio(definition: ScoreMetricDefinition, context: ScoreContext): number {
 	const requiredKinds = new Set(definition.requiredEvidence);
 	const relevantGates = context.gates.filter((gate) => requiredKinds.has(gate.evidenceKind));
 
@@ -109,9 +112,7 @@ function computeEvidenceRatio(
 
 	const passed = relevantGates.filter((gate) => gate.status === "pass").length;
 	const notApplicable = relevantGates.filter((gate) => gate.status === "not_applicable").length;
-	const required = relevantGates.filter(
-		(gate) => gate.status !== "warn",
-	).length;
+	const required = relevantGates.filter((gate) => gate.status !== "warn").length;
 
 	if (required === 0) {
 		return 1;
@@ -120,10 +121,7 @@ function computeEvidenceRatio(
 	return (passed + notApplicable) / required;
 }
 
-function computeThresholdCheck(
-	_definition: ScoreMetricDefinition,
-	context: ScoreContext,
-): number {
+function computeThresholdCheck(_definition: ScoreMetricDefinition, context: ScoreContext): number {
 	const relevantEvidence = context.evidence.filter(
 		(item) => item.result === "pass" || item.result === "fail",
 	);
@@ -134,10 +132,7 @@ function computeThresholdCheck(
 	return passed / relevantEvidence.length;
 }
 
-function computeWeightedInputs(
-	definition: ScoreMetricDefinition,
-	context: ScoreContext,
-): number {
+function computeWeightedInputs(definition: ScoreMetricDefinition, context: ScoreContext): number {
 	const weights = definition.calculation.weights;
 	if (!weights) {
 		return 0;
@@ -158,9 +153,8 @@ function computeWeightedInputs(
 
 	// Changes input: normalize so that having changes is neutral (0.5)
 	// and verification evidence pushes it toward 1
-	const changesInput = context.changedFileCount > 0
-		? Math.min(1, 0.5 + (context.phaseCompletionRatio * 0.5))
-		: 0.5;
+	const changesInput =
+		context.changedFileCount > 0 ? Math.min(1, 0.5 + context.phaseCompletionRatio * 0.5) : 0.5;
 
 	return (phaseWeight * phaseInput + changesWeight * changesInput) / totalWeight;
 }
@@ -182,9 +176,7 @@ function computeRiskRule(context: ScoreContext): number {
 	}
 
 	const maxSurfaceScore = Math.max(
-		...context.riskSurfaces.map(
-			(surface) => surfaceScores[surface] ?? 0.4,
-		),
+		...context.riskSurfaces.map((surface) => surfaceScores[surface] ?? 0.4),
 	);
 
 	// Evidence of adversarial and security review reduces risk
@@ -206,18 +198,13 @@ function computeRiskRule(context: ScoreContext): number {
 	return Math.max(0, Math.min(1, risk));
 }
 
-function computeManualReview(
-	definition: ScoreMetricDefinition,
-	context: ScoreContext,
-): number {
+function computeManualReview(definition: ScoreMetricDefinition, context: ScoreContext): number {
 	const requiredKinds = new Set(definition.requiredEvidence);
 	const reviewEvidence = context.evidence.filter((item) => requiredKinds.has(item.kind));
 
 	if (reviewEvidence.length === 0) {
 		// Check if there's a matching score already recorded
-		const existingScore = context.scores.find(
-			(score) => score.metric === definition.id,
-		);
+		const existingScore = context.scores.find((score) => score.metric === definition.id);
 		if (existingScore && typeof existingScore.value === "number") {
 			return existingScore.value;
 		}

@@ -45,6 +45,19 @@ export const PAVEDA_MCP_TOOLS = [
 		},
 	},
 	{
+		name: "paveda.search_semantic",
+		description: "Search EventStore with semantic similarity.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				query: { type: "string" },
+				top_k: { type: "integer", minimum: 1 },
+				since: { type: "string" },
+			},
+			required: ["query"],
+		},
+	},
+	{
 		name: "paveda.read",
 		description: "Read a project file through Paveda policy mediation.",
 		inputSchema: {

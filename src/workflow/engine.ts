@@ -80,7 +80,12 @@ const FALLBACK_PHASE_GRAPH: PhaseGraph = {
 function loadPhaseGraph(cwd: string): PhaseGraph {
 	const projectPath = join(cwd, ".paveda", "contract.json");
 	const raw = JSON.parse(
-		readFileSync(existsSync(projectPath) ? projectPath : join(harnessRoot(), "contracts", "universal-contract.v1.json"), "utf8"),
+		readFileSync(
+			existsSync(projectPath)
+				? projectPath
+				: join(harnessRoot(), "contracts", "universal-contract.v1.json"),
+			"utf8",
+		),
 	) as Record<string, unknown>;
 
 	const graph = raw.phaseGraph;
@@ -101,18 +106,20 @@ function loadPhaseGraph(cwd: string): PhaseGraph {
 
 function parseNodes(value: unknown): PhaseNode[] {
 	if (!Array.isArray(value)) return FALLBACK_PHASE_GRAPH.nodes;
-	return value.map((node: unknown) => {
-		const n = asRecord(node);
-		return {
-			id: typeof n?.id === "string" ? n.id : "",
-			label: typeof n?.label === "string" ? n.label : "",
-			kind: typeof n?.kind === "string" ? n.kind : "",
-			required: typeof n?.required === "boolean" ? n.required : true,
-			requiredEvidence: parseEvidenceRequirements(n?.requiredEvidence),
-			scoreImpacts: asStringArray(n?.scoreImpacts),
-			failurePolicy: parseFailurePolicy(n?.failurePolicy),
-		};
-	}).filter((node) => node.id.length > 0);
+	return value
+		.map((node: unknown) => {
+			const n = asRecord(node);
+			return {
+				id: typeof n?.id === "string" ? n.id : "",
+				label: typeof n?.label === "string" ? n.label : "",
+				kind: typeof n?.kind === "string" ? n.kind : "",
+				required: typeof n?.required === "boolean" ? n.required : true,
+				requiredEvidence: parseEvidenceRequirements(n?.requiredEvidence),
+				scoreImpacts: asStringArray(n?.scoreImpacts),
+				failurePolicy: parseFailurePolicy(n?.failurePolicy),
+			};
+		})
+		.filter((node) => node.id.length > 0);
 }
 
 function parseEvidenceRequirements(value: unknown): EvidenceRequirement[] {
@@ -133,27 +140,29 @@ function parseFailurePolicy(value: unknown): PhaseFailurePolicy {
 	const policy = asRecord(value);
 	return {
 		onFail: typeof policy?.onFail === "string" ? policy.onFail : "block",
-		missingCapability: typeof policy?.missingCapability === "string" ? policy.missingCapability : "block",
-		maxAttempts:
-			typeof policy?.maxAttempts === "number" ? policy.maxAttempts : 1,
+		missingCapability:
+			typeof policy?.missingCapability === "string" ? policy.missingCapability : "block",
+		maxAttempts: typeof policy?.maxAttempts === "number" ? policy.maxAttempts : 1,
 	};
 }
 
 function parseEdges(value: unknown): PhaseEdge[] {
 	if (!Array.isArray(value)) return FALLBACK_PHASE_GRAPH.edges;
-	return value.map((edge: unknown) => {
-		const e = asRecord(edge);
-		return {
-			from: typeof e?.from === "string" ? e.from : "",
-			to: typeof e?.to === "string" ? e.to : "",
-			type: parseEdgeType(e?.type),
-			...(typeof e?.condition === "string" ? { condition: e.condition } : {}),
-			...(typeof e?.maxAttempts === "number" ? { maxAttempts: e.maxAttempts } : {}),
-			allowedProfiles: asStringArray(e?.allowedProfiles),
-			requiresEvidence: typeof e?.requiresEvidence === "boolean" ? e.requiresEvidence : undefined,
-			recordsDecision: typeof e?.recordsDecision === "boolean" ? e.recordsDecision : undefined,
-		};
-	}).filter((edge) => edge.from.length > 0 && edge.to.length > 0);
+	return value
+		.map((edge: unknown) => {
+			const e = asRecord(edge);
+			return {
+				from: typeof e?.from === "string" ? e.from : "",
+				to: typeof e?.to === "string" ? e.to : "",
+				type: parseEdgeType(e?.type),
+				...(typeof e?.condition === "string" ? { condition: e.condition } : {}),
+				...(typeof e?.maxAttempts === "number" ? { maxAttempts: e.maxAttempts } : {}),
+				allowedProfiles: asStringArray(e?.allowedProfiles),
+				requiresEvidence: typeof e?.requiresEvidence === "boolean" ? e.requiresEvidence : undefined,
+				recordsDecision: typeof e?.recordsDecision === "boolean" ? e.recordsDecision : undefined,
+			};
+		})
+		.filter((edge) => edge.from.length > 0 && edge.to.length > 0);
 }
 
 function parseEdgeType(value: unknown): "normal" | "repair" | "block" | "terminal" {
@@ -224,7 +233,11 @@ export function getNextPhases(
 	return [...new Set(nextPhases)];
 }
 
-export function getRepairTarget(graph: PhaseGraph, failedPhase: string, profile: string): string | null {
+export function getRepairTarget(
+	graph: PhaseGraph,
+	failedPhase: string,
+	profile: string,
+): string | null {
 	const repairEdge = graph.edges.find(
 		(edge) =>
 			edge.type === "repair" &&
@@ -257,8 +270,5 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function harnessRoot(): string {
-	return join(
-		new URL(".", import.meta.url).pathname,
-		"..", "..", "assets", "harness",
-	);
+	return join(new URL(".", import.meta.url).pathname, "..", "..", "assets", "harness");
 }
