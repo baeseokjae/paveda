@@ -705,6 +705,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 	}
 
 	if (command === "monitor") {
+		const once = args.includes("--once");
 		const interval = parseOptionalPositiveInteger(readOption(args, "--interval"), "--interval");
 		const summaryEvery = parseOptionalPositiveInteger(
 			readOption(args, "--summary-every"),
@@ -723,6 +724,7 @@ async function run(command: string | undefined, args: string[]): Promise<void> {
 			storeScope: parseStoreScope(readOption(args, "--store-scope")),
 			intervalMs: interval,
 			summaryEvery,
+			once,
 			signal: signal.signal,
 		})) {
 			if (format === "markdown") {
@@ -2823,7 +2825,7 @@ Common flow:
   verify --run uuid-v7 [--profile fast|standard|strict|release] [--stage mechanical|semantic|consensus] [--cwd path] [--write] [--collect] [--report-json path] [--report-junit path] [--report-dir path] [--db path] [--store-scope project|user]
   status --run uuid-v7 [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
   progress --run uuid-v7 [--watch [--interval seconds]] [--once] [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
-  monitor --run uuid-v7 [--interval seconds] [--summary-every n] [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
+  monitor --run uuid-v7 [--once] [--interval seconds] [--summary-every n] [--format json|markdown] [--cwd path] [--db path] [--store-scope project|user]
   report --run uuid-v7 [--html] [--markdown] --write report.md|report.html [--cwd path] [--db path] [--store-scope project|user]
   handoff --run uuid-v7 [--markdown|--format json] [--cwd path] [--db path] [--store-scope project|user]
   evidence --run uuid-v7 [--cwd path] [--db path] [--store-scope project|user]

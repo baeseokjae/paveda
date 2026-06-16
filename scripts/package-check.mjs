@@ -2013,7 +2013,7 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 	assertIncludes(progressStatusMarkdown, "## Stages");
 	assertIncludes(progressStatusMarkdown, "unit-gate");
 	const progressOutput = parseJson(
-		runCli(cliPath, ["progress", "--run", runId, "--cwd", projectRoot, "--watch"]),
+		runCli(cliPath, ["progress", "--run", runId, "--cwd", projectRoot]),
 		"progress output",
 	);
 	if (
@@ -2024,10 +2024,14 @@ function assertPackagedContractFlow(cliPath, projectRoot) {
 		fail("packaged CLI smoke failed: progress did not expose next evidence command");
 	}
 	const monitorOutput = parseJson(
-		runCli(cliPath, ["monitor", "--run", runId, "--cwd", projectRoot]),
+		runCli(cliPath, ["monitor", "--run", runId, "--cwd", projectRoot, "--once"]),
 		"monitor output",
 	);
-	if (monitorOutput?.runId !== runId || !Array.isArray(monitorOutput?.stages)) {
+	if (
+		monitorOutput?.progress?.runId !== runId ||
+		!Array.isArray(monitorOutput?.progress?.stages) ||
+		!Array.isArray(monitorOutput?.changes)
+	) {
 		fail("packaged CLI smoke failed: monitor did not expose run stages");
 	}
 	const reportPath = join(projectRoot, ".paveda-reports", "run-report.html");
